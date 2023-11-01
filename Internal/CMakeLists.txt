@@ -1,4 +1,4 @@
-﻿# CMakeList.txt : CMake project for SpoolSvHook, include source and define
+# CMakeList.txt : CMake project for SpoolSvHook, include source and define
 # project specific logic here.
 #
 cmake_minimum_required (VERSION 3.8)
@@ -9,13 +9,19 @@ if (POLICY CMP0141)
   set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
 endif()
 
-project ("SpoolSvHook")
+project ("Internal")
+find_package(minhook)
 
-# load libs
+# source files
 
-add_subdirectory(Libs/minhook)
+add_library (Internal SHARED "dllmain.cpp" ) 
 
-#
-add_subdirectory(Internal)
-add_subdirectory(Loader)
+# link libraries
+target_link_libraries(Internal minhook )
+
+
+if (CMAKE_VERSION VERSION_GREATER 3.12)
+  set_property(TARGET Internal PROPERTY CXX_STANDARD 20)
+endif()
+
 # TODO: Add tests and install targets if needed.
