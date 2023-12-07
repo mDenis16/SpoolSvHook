@@ -1,6 +1,0 @@
-# CMake generation dependency list for this directory.
-A:/repos/SpoolSvHook/Libs/minhook/CMakeLists.txt
-A:/repos/SpoolSvHook/Libs/minhook/cmake/minhook-config.cmake.in
-C:/Program Files/CMake/share/cmake-3.28/Modules/BasicConfigVersion-AnyNewerVersion.cmake.in
-C:/Program Files/CMake/share/cmake-3.28/Modules/CMakePackageConfigHelpers.cmake
-C:/Program Files/CMake/share/cmake-3.28/Modules/WriteBasicConfigVersionFile.cmake
