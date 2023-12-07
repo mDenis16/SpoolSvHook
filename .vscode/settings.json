@@ -56,8 +56,12 @@
         "xhash": "cpp",
         "optional": "cpp",
         "evntrace.h": "c",
-        "evntcons.h": "c"
+        "evntcons.h": "c",
+        "*.rh": "c",
+        "algorithm": "cpp"
     },
-    "C_Cpp.errorSquiggles": "enabled",
-    "C_Cpp.intelliSenseEngineFallback": "enabled"
+    "C_Cpp.errorSquiggles": "disabled",
+    "C_Cpp.intelliSenseEngineFallback": "enabled",
+    "cmake.sourceDirectory": "a:/repos/SpoolSvHook/Internal",
+    "C_Cpp.default.cppStandard": "c++20"
 }

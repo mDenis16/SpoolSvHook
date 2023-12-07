@@ -1,0 +1,3 @@
+A:/repos/SpoolSvHook/Internal/vs/CMakeFiles/Internal.dir
+A:/repos/SpoolSvHook/Internal/vs/CMakeFiles/ALL_BUILD.dir
+A:/repos/SpoolSvHook/Internal/vs/CMakeFiles/ZERO_CHECK.dir

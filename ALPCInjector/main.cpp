@@ -10,6 +10,7 @@
 #include <Psapi.h>
 #include <nttpp.h>
 #include "ALPCInjector.hpp"
+#include <spdlog/spdlog.h>
 
 namespace InjectorConstants {
     const int ProcessNotFoundErrorCode = 3;
@@ -89,12 +90,24 @@ bool IsCurrentProcessElevated() {
 
     return bResult;
 }
-
+/*
+    Another solutions has to be found in future.
+    Currently payload calls LoadLibrary without any absolute path, so it loads it straight from C:\Windows\System32
+    A posible solutions is writing a dll path straight from injector somewhere in mmemory and use that in payload.
+*/
+void MoveFileToSystem32(){
+    CopyFileA("stub.dll", "C:\\Windowws\\System32\\test.dll", FALSE);
+}
 int main(int argc, char* argv[]) {
+
+    spdlog::set_level(spdlog::level::debug);
+    
     if (!IsCurrentProcessElevated()) {
         std::cout << "Please run injector with administrator rights!\n";
         return 1;
     }
+    MoveFileToSystem32();
+
 
     const auto targetPid = GetProcessIdByExecutableName("spoolsv.exe");
 

