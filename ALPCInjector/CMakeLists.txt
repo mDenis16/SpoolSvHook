@@ -19,7 +19,7 @@ project ("ALPCInjector")
 
 add_library(ntdll STATIC IMPORTED GLOBAL)
 
-find_package(spdlog)
+
 
 include_directories("../RE_ntlib")
 add_executable(ALPCInjector main.cpp ALPCInjector.cpp)
@@ -32,7 +32,7 @@ set_target_properties(ALPCInjector PROPERTIES
 set_property(TARGET ALPCInjector PROPERTY CXX_STANDARD 20)
 
 
-target_link_libraries(ALPCInjector PRIVATE spdlog::spdlog_header_only)
+target_link_libraries(ALPCInjector PRIVATE spdlog::spdlog)
 
 get_filename_component(PARENT_DIR ../ ABSOLUTE)
 message(${PARENT_DIR})
