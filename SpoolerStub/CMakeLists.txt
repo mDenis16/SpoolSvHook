@@ -16,6 +16,7 @@ set(SOURCES
     Hooking/Hooking.Patterns.cpp
     Hooking/IATHook.cpp
 
+    marshaling.cpp
     CSpoolSVHooks.cpp
     CHooks.cpp
     CBootstrap.cpp
