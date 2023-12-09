@@ -34,9 +34,8 @@ if (CMAKE_VERSION VERSION_GREATER 3.12)
   set_property(TARGET Internal PROPERTY CXX_STANDARD 20)
 endif()
 
-
 # link libraries
-target_link_libraries(Internal minhook spdlog)
+target_link_libraries(Internal minhook spdlog nlohmann_json  )
 
 
 get_filename_component(PARENT_DIR ../ ABSOLUTE)

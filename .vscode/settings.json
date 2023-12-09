@@ -76,7 +76,17 @@
         "string": "cpp",
         "thread": "cpp",
         "variant": "cpp",
-        "xtree": "cpp"
+        "xtree": "cpp",
+        "any": "cpp",
+        "codecvt": "cpp",
+        "csignal": "cpp",
+        "deque": "cpp",
+        "numeric": "cpp",
+        "random": "cpp",
+        "ranges": "cpp",
+        "set": "cpp",
+        "unordered_set": "cpp",
+        "valarray": "cpp"
     },
     "C_Cpp.errorSquiggles": "disabled",
     "C_Cpp.intelliSenseEngineFallback": "enabled",

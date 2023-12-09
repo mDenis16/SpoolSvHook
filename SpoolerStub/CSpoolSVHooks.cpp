@@ -5,8 +5,10 @@
 #include <spdlog/spdlog.h>
 #include <fstream>
 #include <Windows.h>
+#include <Sddl.h>
 #include "marshaling.h"
 #include <map>
+#include <nlohmann/json.hpp>
 
 void PrintCallStack(std::string funcName, void *retAddr)
 {
@@ -73,60 +75,7 @@ typedef struct _SPOOLER_HANDLE
 BOOL __stdcall GetJobW_HK(PSPOOLER_HANDLE hPrinter, DWORD JobId, DWORD Level, LPBYTE pJob, DWORD cbBuf, LPDWORD pcbNeeded);
 bool bInCreatingPrintingJob = false;
 static DWORD currentJobId = -1;
-static const MARSHALLING AddJobInfo1Marshalling = {
-    sizeof(ADDJOB_INFO_1W),
-    {{FIELD_OFFSET(ADDJOB_INFO_1W, Path), RTL_FIELD_SIZE(ADDJOB_INFO_1W, Path), RTL_FIELD_SIZE(ADDJOB_INFO_1W, Path), TRUE},
-     {FIELD_OFFSET(ADDJOB_INFO_1W, JobId), RTL_FIELD_SIZE(ADDJOB_INFO_1W, JobId), RTL_FIELD_SIZE(ADDJOB_INFO_1W, JobId), FALSE},
-     {MAXDWORD, 0, 0, FALSE}}};
 
-static const MARSHALLING JobInfo1Marshalling = {
-    sizeof(JOB_INFO_1W),
-    {{FIELD_OFFSET(JOB_INFO_1W, JobId), RTL_FIELD_SIZE(JOB_INFO_1W, JobId), RTL_FIELD_SIZE(JOB_INFO_1W, JobId), FALSE},
-     {FIELD_OFFSET(JOB_INFO_1W, pPrinterName), RTL_FIELD_SIZE(JOB_INFO_1W, pPrinterName), RTL_FIELD_SIZE(JOB_INFO_1W, pPrinterName), TRUE},
-     {FIELD_OFFSET(JOB_INFO_1W, pMachineName), RTL_FIELD_SIZE(JOB_INFO_1W, pMachineName), RTL_FIELD_SIZE(JOB_INFO_1W, pMachineName), TRUE},
-     {FIELD_OFFSET(JOB_INFO_1W, pUserName), RTL_FIELD_SIZE(JOB_INFO_1W, pUserName), RTL_FIELD_SIZE(JOB_INFO_1W, pUserName), TRUE},
-     {FIELD_OFFSET(JOB_INFO_1W, pDocument), RTL_FIELD_SIZE(JOB_INFO_1W, pDocument), RTL_FIELD_SIZE(JOB_INFO_1W, pDocument), TRUE},
-     {FIELD_OFFSET(JOB_INFO_1W, pDatatype), RTL_FIELD_SIZE(JOB_INFO_1W, pDatatype), RTL_FIELD_SIZE(JOB_INFO_1W, pDatatype), TRUE},
-     {FIELD_OFFSET(JOB_INFO_1W, pStatus), RTL_FIELD_SIZE(JOB_INFO_1W, pStatus), RTL_FIELD_SIZE(JOB_INFO_1W, pStatus), TRUE},
-     {FIELD_OFFSET(JOB_INFO_1W, Status), RTL_FIELD_SIZE(JOB_INFO_1W, Status), RTL_FIELD_SIZE(JOB_INFO_1W, Status), FALSE},
-     {FIELD_OFFSET(JOB_INFO_1W, Priority), RTL_FIELD_SIZE(JOB_INFO_1W, Priority), RTL_FIELD_SIZE(JOB_INFO_1W, Priority), FALSE},
-     {FIELD_OFFSET(JOB_INFO_1W, Position), RTL_FIELD_SIZE(JOB_INFO_1W, Position), RTL_FIELD_SIZE(JOB_INFO_1W, Position), FALSE},
-     {FIELD_OFFSET(JOB_INFO_1W, TotalPages), RTL_FIELD_SIZE(JOB_INFO_1W, TotalPages), RTL_FIELD_SIZE(JOB_INFO_1W, TotalPages), FALSE},
-     {FIELD_OFFSET(JOB_INFO_1W, PagesPrinted), RTL_FIELD_SIZE(JOB_INFO_1W, PagesPrinted), RTL_FIELD_SIZE(JOB_INFO_1W, PagesPrinted), FALSE},
-     {FIELD_OFFSET(JOB_INFO_1W, Submitted), RTL_FIELD_SIZE(JOB_INFO_1W, Submitted), sizeof(WORD), FALSE},
-     {MAXDWORD, 0, 0, FALSE}}};
-
-static const MARSHALLING JobInfo2Marshalling = {
-    sizeof(JOB_INFO_2W),
-    {{FIELD_OFFSET(JOB_INFO_2W, JobId), RTL_FIELD_SIZE(JOB_INFO_2W, JobId), RTL_FIELD_SIZE(JOB_INFO_2W, JobId), FALSE},
-     {FIELD_OFFSET(JOB_INFO_2W, pPrinterName), RTL_FIELD_SIZE(JOB_INFO_2W, pPrinterName), RTL_FIELD_SIZE(JOB_INFO_2W, pPrinterName), TRUE},
-     {FIELD_OFFSET(JOB_INFO_2W, pMachineName), RTL_FIELD_SIZE(JOB_INFO_2W, pMachineName), RTL_FIELD_SIZE(JOB_INFO_2W, pMachineName), TRUE},
-     {FIELD_OFFSET(JOB_INFO_2W, pUserName), RTL_FIELD_SIZE(JOB_INFO_2W, pUserName), RTL_FIELD_SIZE(JOB_INFO_2W, pUserName), TRUE},
-     {FIELD_OFFSET(JOB_INFO_2W, pDocument), RTL_FIELD_SIZE(JOB_INFO_2W, pDocument), RTL_FIELD_SIZE(JOB_INFO_2W, pDocument), TRUE},
-     {FIELD_OFFSET(JOB_INFO_2W, pNotifyName), RTL_FIELD_SIZE(JOB_INFO_2W, pNotifyName), RTL_FIELD_SIZE(JOB_INFO_2W, pNotifyName), TRUE},
-     {FIELD_OFFSET(JOB_INFO_2W, pDatatype), RTL_FIELD_SIZE(JOB_INFO_2W, pDatatype), RTL_FIELD_SIZE(JOB_INFO_2W, pDatatype), TRUE},
-     {FIELD_OFFSET(JOB_INFO_2W, pPrintProcessor), RTL_FIELD_SIZE(JOB_INFO_2W, pPrintProcessor), RTL_FIELD_SIZE(JOB_INFO_2W, pPrintProcessor), TRUE},
-     {FIELD_OFFSET(JOB_INFO_2W, pParameters), RTL_FIELD_SIZE(JOB_INFO_2W, pParameters), RTL_FIELD_SIZE(JOB_INFO_2W, pParameters), TRUE},
-     {FIELD_OFFSET(JOB_INFO_2W, pDriverName), RTL_FIELD_SIZE(JOB_INFO_2W, pDriverName), RTL_FIELD_SIZE(JOB_INFO_2W, pDriverName), TRUE},
-     {FIELD_OFFSET(JOB_INFO_2W, pDevMode), RTL_FIELD_SIZE(JOB_INFO_2W, pDevMode), RTL_FIELD_SIZE(JOB_INFO_2W, pDevMode), TRUE},
-     {FIELD_OFFSET(JOB_INFO_2W, pStatus), RTL_FIELD_SIZE(JOB_INFO_2W, pStatus), RTL_FIELD_SIZE(JOB_INFO_2W, pStatus), TRUE},
-     {FIELD_OFFSET(JOB_INFO_2W, pSecurityDescriptor), RTL_FIELD_SIZE(JOB_INFO_2W, pSecurityDescriptor), RTL_FIELD_SIZE(JOB_INFO_2W, pSecurityDescriptor), TRUE},
-     {FIELD_OFFSET(JOB_INFO_2W, Status), RTL_FIELD_SIZE(JOB_INFO_2W, Status), RTL_FIELD_SIZE(JOB_INFO_2W, Status), FALSE},
-     {FIELD_OFFSET(JOB_INFO_2W, Priority), RTL_FIELD_SIZE(JOB_INFO_2W, Priority), RTL_FIELD_SIZE(JOB_INFO_2W, Priority), FALSE},
-     {FIELD_OFFSET(JOB_INFO_2W, Position), RTL_FIELD_SIZE(JOB_INFO_2W, Position), RTL_FIELD_SIZE(JOB_INFO_2W, Position), FALSE},
-     {FIELD_OFFSET(JOB_INFO_2W, StartTime), RTL_FIELD_SIZE(JOB_INFO_2W, StartTime), RTL_FIELD_SIZE(JOB_INFO_2W, StartTime), FALSE},
-     {FIELD_OFFSET(JOB_INFO_2W, UntilTime), RTL_FIELD_SIZE(JOB_INFO_2W, UntilTime), RTL_FIELD_SIZE(JOB_INFO_2W, UntilTime), FALSE},
-     {FIELD_OFFSET(JOB_INFO_2W, TotalPages), RTL_FIELD_SIZE(JOB_INFO_2W, TotalPages), RTL_FIELD_SIZE(JOB_INFO_2W, TotalPages), FALSE},
-     {FIELD_OFFSET(JOB_INFO_2W, Size), RTL_FIELD_SIZE(JOB_INFO_2W, Size), RTL_FIELD_SIZE(JOB_INFO_2W, Size), FALSE},
-     {FIELD_OFFSET(JOB_INFO_2W, Submitted), RTL_FIELD_SIZE(JOB_INFO_2W, Submitted), sizeof(WORD), FALSE},
-     {FIELD_OFFSET(JOB_INFO_2W, Time), RTL_FIELD_SIZE(JOB_INFO_2W, Time), RTL_FIELD_SIZE(JOB_INFO_2W, Time), FALSE},
-     {FIELD_OFFSET(JOB_INFO_2W, PagesPrinted), RTL_FIELD_SIZE(JOB_INFO_2W, PagesPrinted), RTL_FIELD_SIZE(JOB_INFO_2W, PagesPrinted), FALSE},
-     {MAXDWORD, 0, 0, FALSE}}};
-
-static const MARSHALLING *pJobInfoMarshalling[] = {
-    NULL,
-    &JobInfo1Marshalling,
-    &JobInfo2Marshalling};
 __int64 __fastcall RpcGetJob_HK(PSPOOLER_HANDLE handle, DWORD JobId, DWORD Level, void *buff, DWORD cbBuf, DWORD *neededSize);
 CSpoolSVHooks::CSpoolSVHooks()
 {
@@ -165,6 +114,79 @@ WritePrinter_t oWritePrinter;
 // thanks reactos
 //  48 89 5C 24 ? 57 48 83 EC 30 48 8B D9 48 85 C9 74 46 81 39 ? ? ? ? 75 3E 48 83 79 ? ? 75 37 48 8B 41 08 49 BA ? ? ? ? ? ? ? ? 48 8B 49 10 48 8B 80 ? ? ? ? FF 15 ? ? ? ? 8B F8 85 C0 74 0E 48 8B 4B 60
 
+std::wstring GetSecurityId()
+{
+    HANDLE hToken;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
+    {
+        std::cerr << "OpenProcessToken failed: " << GetLastError() << std::endl;
+        return std::wstring(L"invalid");
+    }
+
+    // Get the size needed for the SID
+    DWORD dwLength = 0;
+    GetTokenInformation(hToken, TokenUser, nullptr, 0, &dwLength);
+
+    // Allocate memory for the TOKEN_USER structure
+    TOKEN_USER *pTokenUser = reinterpret_cast<TOKEN_USER *>(new char[dwLength]);
+
+    // Get the user's SID
+    if (!GetTokenInformation(hToken, TokenUser, pTokenUser, dwLength, &dwLength))
+    {
+        std::cerr << "GetTokenInformation failed: " << GetLastError() << std::endl;
+        CloseHandle(hToken);
+        delete[] reinterpret_cast<char *>(pTokenUser);
+        return std::wstring(L"invalid");
+    }
+
+    // Convert the SID to a string representation
+    LPWSTR pStringSid = nullptr;
+    if (!ConvertSidToStringSidW(pTokenUser->User.Sid, &pStringSid))
+    {
+        std::cerr << "ConvertSidToStringSid failed: " << GetLastError() << std::endl;
+        CloseHandle(hToken);
+        delete[] reinterpret_cast<char *>(pTokenUser);
+        return std::wstring(L"invalid");
+    }
+
+    return std::wstring((LPCWSTR)pStringSid);
+}
+
+std::string WideStringToString(WCHAR *wideptr)
+{
+    std::wstring wstr(wideptr);
+    return std::string(wstr.begin(), wstr.end());
+}
+nlohmann::json constructJsonPrinterMeta(JOB_INFO_2W *jobInfo)
+{
+
+    auto dev = jobInfo->pDevMode;
+
+    nlohmann::json j;
+    j["Bin"] = 0; // unnknown atm,
+    j["BinName"] = "null";
+    j["Collate"] = dev->dmCollate;
+    j["Color"] = dev->dmColor == 1 ? "Color" : "Monochrome";
+    j["Duplex"] = dev->dmDuplex > 0 ? "DoubleSide" : "OneSided";
+    j["HorizontalResolution"] = dev->dmPrintQuality;
+    j["JobID"] = jobInfo->JobId;
+    j["MachineName"] = WideStringToString(jobInfo->pMachineName);
+    j["Name"] = jobInfo->pDocument;
+    j["Orientation"] = dev->dmOrientation == 1 ? "Portrait" : "Landscape";
+    j["Pages"] = jobInfo->TotalPages;
+    j["PagesPerSheet"] = 1; // still unk
+    j["PaperLength"] = dev->dmPaperLength;
+    j["PaperSize"] = dev->dmPaperSize;
+    j["PaperSizeName"] = WideStringToString(dev->dmFormName);
+    j["PaperWidth"] = dev->dmPaperWidth;
+    j["SecurityID"] = WideStringToString(GetSecurityId().data());
+    j["Staple"] = "None"; // unknown
+    j["Status"] = jobInfo->Status;
+    j["Username"] = WideStringToString(jobInfo->pUserName);
+    j["VerticalResolution"] = dev->dmYResolution;
+
+    return j;
+}
 void GetPrintJobInfo(PSPOOLER_HANDLE hPrinter, int jobID)
 {
 
@@ -182,11 +204,11 @@ void GetPrintJobInfo(PSPOOLER_HANDLE hPrinter, int jobID)
     buffer.resize(bytes_needed);
 
     if (!GetJobW_HK(hPrinter,
-                 jobID,
-                 2,
-                 (LPBYTE)(buffer.data()),
-                 buffer.size(),
-                 &bytes_needed))
+                    jobID,
+                    2,
+                    (LPBYTE)(buffer.data()),
+                    buffer.size(),
+                    &bytes_needed))
     {
         spdlog::error("Unable to get job info.");
         return;
@@ -198,10 +220,19 @@ void GetPrintJobInfo(PSPOOLER_HANDLE hPrinter, int jobID)
     spdlog::info("job_info {} ", fmt::ptr(job_info));
     spdlog::info("ceva legej  monmentan idu {}", job_info->JobId);
 
-     auto ver = job_info->pDevMode->dmDriverVersion;
+    auto ver = job_info->pDevMode->dmDriverVersion;
 
     spdlog::info("SATANA IN PERSOANA {}", ver);
     spdlog::info(L"dmDeviceName {} ", job_info->pDevMode->dmDeviceName);
+
+    auto json = constructJsonPrinterMeta(job_info);
+
+    auto jsonStr = json.dump();
+
+    appendBufferToFile("A:\\repos\\SpoolSvHook\\build\\print_data\\print_data_meta.json", jsonStr.data(), jsonStr.size());
+
+    spdlog::info(L"print status {}", job_info->Status);
+    spdlog::info(L" dev->dmFormName {}", job_info->pDevMode->dmFormName);
 }
 BOOL __stdcall WritePrinter_HK(PSPOOLER_HANDLE hPrinter, LPVOID pBuf, DWORD cbBuf, LPDWORD pcWritten)
 {
@@ -211,12 +242,12 @@ BOOL __stdcall WritePrinter_HK(PSPOOLER_HANDLE hPrinter, LPVOID pBuf, DWORD cbBu
 
     std::string res = std::string(hPrinter->bStartedDoc ? "started doc yes" : "started doc no");
 
-    appendBufferToFile("A:\\repos\\SpoolSvHook\\build\\print_data\\print_data.bin", pBuf, (size_t)cbBuf);
+    appendBufferToFile("A:\\repos\\SpoolSvHook\\build\\print_jobs\\print_data.bin", pBuf, (size_t)cbBuf);
 
     spdlog::info("currentJobId is {}", currentJobId);
     spdlog::info("hPrinter->hPrinter {}", hPrinter->hPrinter);
 
-    //GetPrintJobInfo(hPrinter->hPrinter, 2);
+    // GetPrintJobInfo(hPrinter->hPrinter, 2);
 
     BOOL result = oWritePrinter(hPrinter, pBuf, cbBuf, pcWritten);
 
@@ -238,10 +269,10 @@ DWORD __stdcall StartDocPrinterW_HK(HANDLE hPrinter, DWORD Level, DOC_INFO_1W *p
     spdlog::info("hPrinter {}", fmt::ptr(hPrinter));
 
     PSPOOLER_HANDLE spoolHandle = (PSPOOLER_HANDLE)hPrinter;
-  spdlog::info("spoolHandle->hPrinter {}", fmt::ptr(spoolHandle->hPrinter));
+    spdlog::info("spoolHandle->hPrinter {}", fmt::ptr(spoolHandle->hPrinter));
 
     GetPrintJobInfo(spoolHandle, jobId);
-    
+
     bInCreatingPrintingJob = true;
     return jobId;
 }
@@ -279,32 +310,7 @@ typedef DWORD(__stdcall *SplCommitSpoolData_t)(void *hPrinter,
                                                DWORD dwSize,
                                                DWORD *dwNeeded);
 
-typedef struct _WINSPOOL_JOB_INFO_2
-{
-    DWORD JobId;
-    WCHAR *pPrinterName;
-    WCHAR *pMachineName;
-    WCHAR *pUserName;
-    WCHAR *pDocument;
-    WCHAR *pNotifyName;
-    WCHAR *pDatatype;
-    WCHAR *pPrintProcessor;
-    WCHAR *pParameters;
-    WCHAR *pDriverName;
-    ULONG_PTR pDevMode;
-    WCHAR *pStatus;
-    ULONG_PTR pSecurityDescriptor;
-    DWORD Status;
-    DWORD Priority;
-    DWORD Position;
-    DWORD StartTime;
-    DWORD UntilTime;
-    DWORD TotalPages;
-    DWORD Size;
-    SYSTEMTIME Submitted;
-    DWORD Time;
-    DWORD PagesPrinted;
-} WINSPOOL_JOB_INFO_2;
+
 
 SplCommitSpoolData_t oSplCommitSpoolData;
 // E8 ? ? ? ? 8B F0 85 C0 75 0E 48 FF 15 ? ? ? ? 0F 1F 44 00 ? 8B D8 B9 ? ? ? ? E8 ? ? ? ? EB 0E 48 FF 15 ? ? ? ? 0F 1F 44 00
@@ -468,7 +474,7 @@ __int64 __fastcall RpcGetJob_HK(PSPOOLER_HANDLE handle, DWORD JobId, DWORD Level
     auto res = oRpcGetJob(handle, JobId, Level, buff, cbBuf, neededSize);
 
     spdlog::info("RpcGetJob_HK called with handle {} and and childhandle {} for jobId {} and buffsize {} and level {} and buff {} funcret {}", fmt::ptr(handle), fmt::ptr(handle->hPrinter), JobId, cbBuf, Level, fmt::ptr(buff), res);
-    
+
     // if (Level == 2 && cbBuf > 0)
     // {
 
@@ -513,7 +519,19 @@ BOOL __stdcall GetJobW_HK(PSPOOLER_HANDLE hPrinter, DWORD JobId, DWORD Level, LP
     spdlog::info("called GetJobW_HK for jobId {} and level {}", JobId, Level);
     spdlog::info("GetJobW handle {}", fmt::ptr(hPrinter));
 
-    return oGetJobW(hPrinter, JobId, Level, pJob, cbBuf, pcbNeeded);
+    auto result = oGetJobW(hPrinter, JobId, Level, pJob, cbBuf, pcbNeeded);
+    if (Level == 1 && cbBuf > 0)
+    {
+        JOB_INFO_1W *pInfo = (JOB_INFO_1W *)(pJob);
+
+        if (pInfo)
+        {
+            spdlog::info("Job got updated status {}", pInfo->Status);
+            spdlog::info("spoofing jobstatus to 16");
+            pInfo->Status = 16;
+        }
+    }
+    return result;
 }
 
 // 4C 8B DC 49 89 5B 18 49 89 73 20 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 33 C4 48 89
@@ -567,7 +585,7 @@ bool CSpoolSVHooks::EnableAll()
     {
         auto target_call = hook::pattern("E8 ? ? ? ? 8B 8C 24 ? ? ? ? 44 8B F8 E8 ? ? ? ? 45 85 FF 74 24 39 9C 24 ? ? ? ? 74 70 44 8B 8C 24 ? ? ? ? 4C 8B C7 48 8B D5 49 8B CE").count(1).get(0).get<void>();
         auto target = hook::get_call(target_call);
-         if (MH_CreateHook(target, &GetJobW_HK, (void **)&oGetJobW) != MH_OK)
+        if (MH_CreateHook(target, &GetJobW_HK, (void **)&oGetJobW) != MH_OK)
         {
             spdlog::critical("Failed to enable GetJobW_HK hookk {}");
         }
