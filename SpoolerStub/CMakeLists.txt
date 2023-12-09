@@ -6,8 +6,8 @@ cmake_minimum_required (VERSION 3.8)
 
 project ("Internal")
 
-
-
+set(SPDLOG_WCHAR_TO_UTF8_SUPPORT ON)
+add_compile_definitions(SPDLOG_WCHAR_TO_UTF8_SUPPORT)
 add_compile_definitions(_SILENCE_ALL_MS_EXT_DEPRECATION_WARNINGS)
 # Add the source files
 set(SOURCES
