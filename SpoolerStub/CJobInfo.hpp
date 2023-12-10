@@ -15,5 +15,7 @@ public:
     T* CastData(){
         return (T*)(buff);
     }
+
+    
     ~CJobInfo();
 };

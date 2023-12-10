@@ -1,8 +1,13 @@
 #include <Windows.h>
-#include "CSpoolSVHooks.hpp"
 
+#include "inc.hpp"
+
+#include "CSpoolSVHooks.hpp"
 #include "CJobInfo.hpp"
 #include <spdlog/spdlog.h>
+
+
+
 
 CJobInfo::CJobInfo(void* _hPrinter, int _JobId, int _Level)
     : hPrinter(_hPrinter), JobId(_JobId), Level(_Level) {
@@ -37,6 +42,7 @@ CJobInfo::CJobInfo(void* _hPrinter, int _JobId, int _Level)
 CJobInfo::~CJobInfo() {
    delete[] buff;
 }
+
 
 
    
