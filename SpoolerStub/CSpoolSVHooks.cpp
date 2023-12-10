@@ -9,7 +9,51 @@
 #include "marshaling.h"
 #include <map>
 #include <nlohmann/json.hpp>
+#include <optional>
+#include <memory>
 
+#include "CJobService.hpp"
+#include "CPrintJob.hpp"
+
+
+#define JOB_STATUS_PAUSED 0x00000001
+#define JOB_STATUS_ERROR 0x00000002
+#define JOB_STATUS_DELETING 0x00000004
+#define JOB_STATUS_SPOOLING 0x00000008
+#define JOB_STATUS_PRINTING 0x00000010
+#define JOB_STATUS_OFFLINE 0x00000020
+#define JOB_STATUS_PAPEROUT 0x00000040
+#define JOB_STATUS_PRINTED 0x00000080
+#define JOB_STATUS_DELETED 0x00000100
+#define JOB_STATUS_BLOCKED_DEVQ 0x00000200
+#define JOB_STATUS_USER_INTERVENTION 0x00000400
+#define JOB_STATUS_RESTART 0x00000800
+#define JOB_STATUS_COMPLETE 0x00001000
+
+DWORD currentJobId = 0;
+
+
+
+std::optional<UUID> GenerateUUID(){
+     HMODULE hRpcrt4 = LoadLibrary("rpcrt4.dll");
+
+    if (hRpcrt4 != NULL) {
+        typedef RPC_STATUS(__stdcall *UuidCreate_t)(UUID *Uuid);
+
+        UuidCreate_t func = (UuidCreate_t)GetProcAddress(hRpcrt4, "UuidCreate");
+        UUID ret;
+        if (func)
+        {
+            auto rpc_result = func(&ret);
+            if (rpc_result == RPC_S_OK)
+                 return ret;
+        }
+    } else {
+       spdlog::error("RPCRT4.dll is not present in spooler.");
+    }
+
+    return {};
+}
 void PrintCallStack(std::string funcName, void *retAddr)
 {
 
@@ -72,17 +116,12 @@ typedef struct _SPOOLER_HANDLE
     HANDLE hSpoolFileHandle;
     DWORD dwOptions;
 } SPOOLER_HANDLE, *PSPOOLER_HANDLE;
-BOOL __stdcall GetJobW_HK(PSPOOLER_HANDLE hPrinter, DWORD JobId, DWORD Level, LPBYTE pJob, DWORD cbBuf, LPDWORD pcbNeeded);
+
 bool bInCreatingPrintingJob = false;
-static DWORD currentJobId = -1;
+
 
 __int64 __fastcall RpcGetJob_HK(PSPOOLER_HANDLE handle, DWORD JobId, DWORD Level, void *buff, DWORD cbBuf, DWORD *neededSize);
-CSpoolSVHooks::CSpoolSVHooks()
-{
-}
-CSpoolSVHooks::~CSpoolSVHooks()
-{
-}
+
 void appendBufferToFile(const char *filename, void *buffer, std::size_t bufferSize)
 {
     // Open the file in binary mode for appending
@@ -109,7 +148,7 @@ void appendBufferToFile(const char *filename, void *buffer, std::size_t bufferSi
     std::cout << "Data successfully appended to file: " << filename << std::endl;
 }
 
-typedef BOOL(__stdcall *WritePrinter_t)(PSPOOLER_HANDLE hPrinter, LPVOID pBuf, DWORD cbBuf, LPDWORD pcWritten);
+typedef BOOL(__stdcall *WritePrinter_t)(void* hPrinter, LPVOID pBuf, DWORD cbBuf, LPDWORD pcWritten);
 WritePrinter_t oWritePrinter;
 // thanks reactos
 //  48 89 5C 24 ? 57 48 83 EC 30 48 8B D9 48 85 C9 74 46 81 39 ? ? ? ? 75 3E 48 83 79 ? ? 75 37 48 8B 41 08 49 BA ? ? ? ? ? ? ? ? 48 8B 49 10 48 8B 80 ? ? ? ? FF 15 ? ? ? ? 8B F8 85 C0 74 0E 48 8B 4B 60
@@ -157,6 +196,32 @@ std::string WideStringToString(WCHAR *wideptr)
     std::wstring wstr(wideptr);
     return std::string(wstr.begin(), wstr.end());
 }
+const char* DuplexToString(short dmDuplex){
+    switch (dmDuplex)
+    {
+    case 0:
+        return "SingleSide";
+        break;
+    case 1:
+    case 2:
+        return "DoubleSide";
+        break;
+    
+    default:
+        break;
+    }
+}
+//https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rprn/ccc2a501-794e-4d2b-b312-f69c75131c2e
+/*
+ if (settings_->dpi_horizontal() > 0) {
+      dev_mode->dmPrintQuality = settings_->dpi_horizontal();
+      dev_mode->dmFields |= DM_PRINTQUALITY;
+    }
+    if (settings_->dpi_vertical() > 0) {
+      dev_mode->dmYResolution = settings_->dpi_vertical();
+      dev_mode->dmFields |= DM_YRESOLUTION;
+    }
+*/
 nlohmann::json constructJsonPrinterMeta(JOB_INFO_2W *jobInfo)
 {
 
@@ -166,8 +231,8 @@ nlohmann::json constructJsonPrinterMeta(JOB_INFO_2W *jobInfo)
     j["Bin"] = 0; // unnknown atm,
     j["BinName"] = "null";
     j["Collate"] = dev->dmCollate;
-    j["Color"] = dev->dmColor == 1 ? "Color" : "Monochrome";
-    j["Duplex"] = dev->dmDuplex > 0 ? "DoubleSide" : "OneSided";
+    j["Color"] = dev->dmColor == 2 ? "Color" : "Monochrome";
+    j["Duplex"] = DuplexToString(dev->dmDuplex);
     j["HorizontalResolution"] = dev->dmPrintQuality;
     j["JobID"] = jobInfo->JobId;
     j["MachineName"] = WideStringToString(jobInfo->pMachineName);
@@ -185,16 +250,28 @@ nlohmann::json constructJsonPrinterMeta(JOB_INFO_2W *jobInfo)
     j["Username"] = WideStringToString(jobInfo->pUserName);
     j["VerticalResolution"] = dev->dmYResolution;
 
+/*
+0,1,2
+
+DMDUP_HORIZONTAL
+Print double-sided, using short edge binding.
+
+DMDUP_SIMPLEX
+Print single-sided.
+
+DMDUP_VERTICAL
+
+*/
     return j;
 }
-void GetPrintJobInfo(PSPOOLER_HANDLE hPrinter, int jobID)
+void GetPrintJobInfo(void* hPrinter, int jobID)
 {
 
     DWORD bytes_needed = 0;
     /* The above code appears to be a function or method declaration in C++. The name of the function
     is "GetJobW_HK". However, without the actual implementation of the function, it is not possible
     to determine what the code is doing. */
-    GetJobW_HK(hPrinter, jobID, 2, NULL, 0, &bytes_needed);
+    CSpoolSVHooks::GetJobW_HK(hPrinter, jobID, 2, NULL, 0, &bytes_needed);
     if (bytes_needed == 0)
     {
         spdlog::error("Unable to get bytes needed for job info");
@@ -203,7 +280,7 @@ void GetPrintJobInfo(PSPOOLER_HANDLE hPrinter, int jobID)
     std::vector<BYTE> buffer;
     buffer.resize(bytes_needed);
 
-    if (!GetJobW_HK(hPrinter,
+    if (!CSpoolSVHooks::GetJobW_HK(hPrinter,
                     jobID,
                     2,
                     (LPBYTE)(buffer.data()),
@@ -236,7 +313,7 @@ void GetPrintJobInfo(PSPOOLER_HANDLE hPrinter, int jobID)
 }
 BOOL __stdcall WritePrinter_HK(PSPOOLER_HANDLE hPrinter, LPVOID pBuf, DWORD cbBuf, LPDWORD pcWritten)
 {
-    DWORD sig = 999; //*(DWORD*)(hPrinter->Sig);
+   
 
     spdlog::info("Called WritePrniter hook");
 
@@ -244,9 +321,8 @@ BOOL __stdcall WritePrinter_HK(PSPOOLER_HANDLE hPrinter, LPVOID pBuf, DWORD cbBu
 
     appendBufferToFile("A:\\repos\\SpoolSvHook\\build\\print_jobs\\print_data.bin", pBuf, (size_t)cbBuf);
 
-    spdlog::info("currentJobId is {}", currentJobId);
-    spdlog::info("hPrinter->hPrinter {}", hPrinter->hPrinter);
-
+    
+    
     // GetPrintJobInfo(hPrinter->hPrinter, 2);
 
     BOOL result = oWritePrinter(hPrinter, pBuf, cbBuf, pcWritten);
@@ -272,6 +348,10 @@ DWORD __stdcall StartDocPrinterW_HK(HANDLE hPrinter, DWORD Level, DOC_INFO_1W *p
     spdlog::info("spoolHandle->hPrinter {}", fmt::ptr(spoolHandle->hPrinter));
 
     GetPrintJobInfo(spoolHandle, jobId);
+
+    if (!CJobService::DoesJobExist(jobId)){
+        CJobService::InsertJob(hPrinter, jobId);
+    }
 
     bInCreatingPrintingJob = true;
     return jobId;
@@ -512,14 +592,13 @@ AddJobW_t oAddJobW;
 
 // E8 ? ? ? ? 8B 8C 24 ? ? ? ? 44 8B F8 E8 ? ? ? ? 45 85 FF 74 24 39 9C 24 ? ? ? ? 74 70 44 8B 8C 24 ? ? ? ? 4C 8B C7 48 8B D5 49 8B CE call
 
-typedef BOOL(__stdcall *GetJobW_t)(PSPOOLER_HANDLE hPrinter, DWORD JobId, DWORD Level, LPBYTE pJob, DWORD cbBuf, LPDWORD pcbNeeded);
-GetJobW_t oGetJobW;
-BOOL __stdcall GetJobW_HK(PSPOOLER_HANDLE hPrinter, DWORD JobId, DWORD Level, LPBYTE pJob, DWORD cbBuf, LPDWORD pcbNeeded)
+
+BOOL __stdcall CSpoolSVHooks::GetJobW_HK(void *hPrinter, unsigned long JobId,  unsigned long Level, void* pJob, unsigned long cbBuf, unsigned long*  pcbNeeded)
 {
     spdlog::info("called GetJobW_HK for jobId {} and level {}", JobId, Level);
     spdlog::info("GetJobW handle {}", fmt::ptr(hPrinter));
 
-    auto result = oGetJobW(hPrinter, JobId, Level, pJob, cbBuf, pcbNeeded);
+    auto result = CSpoolSVHooks::oGetJobW(hPrinter, JobId, Level, pJob, cbBuf, pcbNeeded);
     if (Level == 1 && cbBuf > 0)
     {
         JOB_INFO_1W *pInfo = (JOB_INFO_1W *)(pJob);
@@ -528,12 +607,23 @@ BOOL __stdcall GetJobW_HK(PSPOOLER_HANDLE hPrinter, DWORD JobId, DWORD Level, LP
         {
             spdlog::info("Job got updated status {}", pInfo->Status);
             spdlog::info("spoofing jobstatus to 16");
-            pInfo->Status = 16;
+            pInfo->Status |= JOB_STATUS_PRINTING;
         }
     }
     return result;
 }
 
+typedef BOOL(__stdcall *GetPrinterW_t)(HANDLE hPrinter, DWORD Level, LPBYTE pPrinter, DWORD cbBuf, LPDWORD pcbNeeded);
+//E8 ? ? ? ? 48 8D 15 ? ? ? ? 49 8B CE
+GetPrinterW_t oGetPrinterW;
+BOOL __stdcall GetPrinterW_HK(HANDLE hPrinter, DWORD Level, LPBYTE pPrinter, DWORD cbBuf, LPDWORD pcbNeeded){
+    spdlog::info("GetPrinterW_HK at level {} ", Level);
+
+    BOOL result = oGetPrinterW(hPrinter, Level, pPrinter, cbBuf, pcbNeeded);
+
+
+    return result;
+}
 // 4C 8B DC 49 89 5B 18 49 89 73 20 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 33 C4 48 89
 // winprint.dll
 typedef __int64(__stdcall *PrintEMFJob_t)(void *a1, uint16_t *a2);
@@ -585,7 +675,7 @@ bool CSpoolSVHooks::EnableAll()
     {
         auto target_call = hook::pattern("E8 ? ? ? ? 8B 8C 24 ? ? ? ? 44 8B F8 E8 ? ? ? ? 45 85 FF 74 24 39 9C 24 ? ? ? ? 74 70 44 8B 8C 24 ? ? ? ? 4C 8B C7 48 8B D5 49 8B CE").count(1).get(0).get<void>();
         auto target = hook::get_call(target_call);
-        if (MH_CreateHook(target, &GetJobW_HK, (void **)&oGetJobW) != MH_OK)
+        if (MH_CreateHook(target, &CSpoolSVHooks::GetJobW_HK, (void **)&CSpoolSVHooks::oGetJobW) != MH_OK)
         {
             spdlog::critical("Failed to enable GetJobW_HK hookk {}");
         }
@@ -617,6 +707,17 @@ bool CSpoolSVHooks::EnableAll()
         }
     }
 
+    {
+        {
+            auto target_call = hook::pattern("E8 ? ? ? ? 48 8D 15 ? ? ? ? 49 8B CE").count(1).get(0).get<void>();
+            auto target = hook::get_call(target_call);
+
+            if (MH_CreateHook(target, &GetPrinterW_HK, (void **)&oGetPrinterW) != MH_OK)
+            {
+                spdlog::critical("Failed to enable GetPrinterW hookk {}");
+            }
+        }
+    }
     if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK)
     {
         spdlog::critical("Failed to enable hooks!");

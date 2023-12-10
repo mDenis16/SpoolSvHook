@@ -9,7 +9,7 @@
 
 CHooks::CHooks()
 {
-    m_SpoolSVHooks = std::make_unique<CSpoolSVHooks>();
+   // m_SpoolSVHooks = std::make_unique<CSpoolSVHooks>();
 }
 
 CHooks::~CHooks()
@@ -27,5 +27,6 @@ void CHooks::HookAll()
         spdlog::critical("Unable to initialize Minhook library.");
         return;
     }
-    m_SpoolSVHooks->EnableAll();
+
+    CSpoolSVHooks::EnableAll();
 }

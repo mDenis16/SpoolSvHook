@@ -17,6 +17,9 @@ set(SOURCES
     Hooking/IATHook.cpp
 
     marshaling.cpp
+    CJobInfo.cpp
+    CPrintJob.cpp
+    CJobService.cpp
     CSpoolSVHooks.cpp
     CHooks.cpp
     CBootstrap.cpp
