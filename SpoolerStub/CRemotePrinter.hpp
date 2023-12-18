@@ -1,0 +1,3 @@
+class CRemotePrinter : public CPrinter {
+
+};

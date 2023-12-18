@@ -116,6 +116,28 @@ bool MoveFileToSystem32()
     }
     return true;
 }
+
+void RestartSpoolerService()
+{
+    STARTUPINFO si = {};
+    si.cb = sizeof(STARTUPINFO);
+    GetStartupInfo(&si);
+
+    PROCESS_INFORMATION pi = {};
+
+    // is modified by the call to CreateProcess (unicode version).
+    TCHAR szCmdLine[] = ("cmd.exe /C \"net stop spooler & net start spooler\"");
+
+    // send shell command to restart our service.
+    if (CreateProcess(NULL, szCmdLine, NULL, NULL, FALSE, NULL, NULL, NULL, &si, &pi))
+    {
+        if (WaitForSingleObject(pi.hProcess, INFINITE) == WAIT_FAILED)
+        {
+            spdlog::error("WaitForSingleObject inifinte failed");
+        }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+}
 int main(int argc, char *argv[])
 {
 
@@ -127,8 +149,11 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    RestartSpoolerService();
+
     if (!MoveFileToSystem32())
         return 2;
+
 
     const auto targetPid = GetProcessIdByExecutableName("spoolsv.exe");
 

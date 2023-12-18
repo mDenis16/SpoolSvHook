@@ -18,12 +18,19 @@ set(SOURCES
 
     marshaling.cpp
     Utilities.cpp
+
+
+    CPrinter.cpp
+    CRemotePrinter.cpp
+    
+    CWebSocket.cpp
     CJobInfo.cpp
     CPrintJob.cpp
     CJobService.cpp
     CSpoolSVHooks.cpp
     CHooks.cpp
     CBootstrap.cpp
+
 
     dllmain.cpp
     # Add other source files if needed
@@ -40,6 +47,13 @@ endif()
 
 # link libraries
 target_link_libraries(Internal minhook spdlog nlohmann_json  )
+
+# include header only libraries
+
+get_filename_component(PARENT_DIR ../ ABSOLUTE)
+
+include_directories(${PARENT_DIR}/Libs/asio/asio/include ${PARENT_DIR}/Libs/websocketpp )
+message(${PARENT_DIR})
 
 
 get_filename_component(PARENT_DIR ../ ABSOLUTE)

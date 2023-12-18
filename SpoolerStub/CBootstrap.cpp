@@ -4,6 +4,8 @@
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/msvc_sink.h>
+#include "CWebSocket.hpp"
+
 class debug_sink final : public spdlog::sinks::base_sink<spdlog::details::null_mutex>
 {
 protected:
@@ -30,6 +32,7 @@ CBootstrap::CBootstrap()
 	spdlog::set_default_logger(S_logger);
 	spdlog::set_level(spdlog::level::debug);
 	m_Hooks = std::make_unique<CHooks>();
+	m_WebSocket = std::make_unique<CWebSocket>();
 }
 CBootstrap::~CBootstrap()
 {
@@ -37,4 +40,5 @@ CBootstrap::~CBootstrap()
 void CBootstrap::Run()
 {
 	m_Hooks->HookAll();
+	m_WebSocket->Run(5566);
 }

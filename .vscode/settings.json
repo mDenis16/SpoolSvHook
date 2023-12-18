@@ -86,7 +86,9 @@
         "ranges": "cpp",
         "set": "cpp",
         "unordered_set": "cpp",
-        "valarray": "cpp"
+        "valarray": "cpp",
+        "queue": "cpp",
+        "*.ipp": "cpp"
     },
     "C_Cpp.errorSquiggles": "disabled",
     "C_Cpp.intelliSenseEngineFallback": "enabled",

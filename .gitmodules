@@ -7,3 +7,9 @@
 [submodule "Libs/json"]
 	path = Libs/json
 	url = https://github.com/nlohmann/json
+[submodule "Libs/websocketpp"]
+	path = Libs/websocketpp
+	url = https://github.com/zaphoyd/websocketpp
+[submodule "Libs/asio"]
+	path = Libs/asio
+	url = https://github.com/chriskohlhoff/asio

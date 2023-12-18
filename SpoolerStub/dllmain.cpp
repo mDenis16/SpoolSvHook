@@ -8,8 +8,7 @@
 unsigned long WINAPI initialize(void *instance)
 {
 	OutputDebugString("a pornit threadu");
-	static CBootstrap boot;
-	 boot.Run();
+	CBootstrap::Get().Run();
 	return 0;
 }
 
