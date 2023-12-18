@@ -88,7 +88,12 @@
         "unordered_set": "cpp",
         "valarray": "cpp",
         "queue": "cpp",
-        "*.ipp": "cpp"
+        "*.ipp": "cpp",
+        "cinttypes": "cpp",
+        "coroutine": "cpp",
+        "future": "cpp",
+        "source_location": "cpp",
+        "strstream": "cpp"
     },
     "C_Cpp.errorSquiggles": "disabled",
     "C_Cpp.intelliSenseEngineFallback": "enabled",

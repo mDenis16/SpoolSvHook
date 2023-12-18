@@ -638,19 +638,54 @@ EnumPrintersW_t oEnumPrintersW;
     DWORD   Attributes;
 */
 #define WORD_ALIGN_DOWN(addr) ((LPBYTE)(((DWORD)addr) &= ~1))
-#define DWORD_ALIGN_UP(sizeAAA) ((sizeAAA+3)&~3)
-DWORD PrinterInfo1Strings[]={offsetof(PRINTER_INFO_1A, pDescription),
-                             offsetof(PRINTER_INFO_1A, pName),
-                             offsetof(PRINTER_INFO_1A, pComment),
-                             0xFFFFFFFF};
-                             
-//
+#define DWORD_ALIGN_UP(sizeAAA) ((sizeAAA + 3) & ~3)
+DWORD PrinterInfo1Strings[] = {offsetof(PRINTER_INFO_1A, pDescription),
+                               offsetof(PRINTER_INFO_1A, pName),
+                               offsetof(PRINTER_INFO_1A, pComment),
+                               0xFFFFFFFF};
+DWORD PrinterInfo4Strings[] = {offsetof(PRINTER_INFO_4A, pPrinterName),
+                               offsetof(PRINTER_INFO_4A, pServerName),
+                               0xFFFFFFFF};
 
+typedef LPBYTE(__stdcall *PackStrings_t)(LPWSTR *pSource,
+                                         LPBYTE pDest,
+                                         DWORD *DestOffsets,
+                                         LPBYTE pEnd);
+
+//
+/*
+e sfant codul acesta
+
+*/
+LPBYTE
+CopyPrinterNameToPrinterInfo4(
+    LPWSTR pServerName,
+    LPWSTR pPrinterName,
+    LPBYTE pPrinter,
+    LPBYTE pEnd)
+{
+    static PackStrings_t fnPackStrings = (PackStrings_t)GetProcAddress(GetModuleHandle("spoolss.dll"), "PackStrings");
+
+    LPWSTR SourceStrings[sizeof(PRINTER_INFO_4) / sizeof(LPWSTR)];
+    LPWSTR *pSourceStrings = SourceStrings;
+    LPPRINTER_INFO_4 pPrinterInfo = (LPPRINTER_INFO_4)pPrinter;
+    DWORD *pOffsets;
+
+    pOffsets = PrinterInfo4Strings;
+
+    *pSourceStrings++ = pPrinterName;
+    *pSourceStrings++ = pServerName;
+
+    pEnd = fnPackStrings(SourceStrings,
+                         (LPBYTE)pPrinterInfo,
+                         pOffsets,
+                         pEnd);
+
+    pPrinterInfo->Attributes = PRINTER_ATTRIBUTE_LOCAL;
+
+    return pEnd;
+}
 //__int64 __fastcall PackStrings(_QWORD, _QWORD, _QWORD, _QWORD)
-typedef LPBYTE(__stdcall *PackStrings_t)(  LPWSTR *pSource,
-    LPBYTE pDest,
-    DWORD *DestOffsets,
-    LPBYTE pEnd);
 
 BOOL __stdcall EnumPrintersW_HK(
     DWORD Flags,
@@ -665,76 +700,122 @@ BOOL __stdcall EnumPrintersW_HK(
 
     if (dwLevel == 1)
     {
-        auto pPrinter = (PRINTER_INFO_1W*)(lpPrinterEnum);
+        auto pPrinter = (PRINTER_INFO_1W *)(lpPrinterEnum);
 
         static PackStrings_t fnPackStrings = (PackStrings_t)GetProcAddress(GetModuleHandle("spoolss.dll"), "PackStrings");
 
         DWORD i, NoReturned, Total;
         DWORD cb;
-       LPBYTE  pEnd;
+        LPBYTE pEnd;
         LPWSTR SourceStrings[sizeof(PRINTER_INFO_1) / sizeof(LPWSTR)];
         WCHAR string[MAX_PATH];
 
-     //   DBGMSG(DBG_TRACE, ("EnumerateDomains pPrinter %x cbBuf %d pcbNeeded %x pcReturned %x pEnd %x\n",
-       //                    pPrinter, cbBuf, pcbNeeded, pcReturned, pEnd));
+        //   DBGMSG(DBG_TRACE, ("EnumerateDomains pPrinter %x cbBuf %d pcbNeeded %x pcReturned %x pEnd %x\n",
+        //                    pPrinter, cbBuf, pcbNeeded, pcReturned, pEnd));
 
         *pcReturned = 0;
         *pcbNeeded = 0;
 
         static wchar_t cel_mai_Tare_sv[] = L"ceauder";
-        static wchar_t szLoggedOnDomain[] =  L"AXE";
+        static wchar_t szLoggedOnDomain[] = L"AXE";
 
         pEnd = (LPBYTE)pPrinter + cbBuf - *pcbNeeded;
 
-            for (i = 0; i < NoReturned; i++)
+        for (i = 0; i < NoReturned; i++)
+        {
+
+            wcscpy(string, L"cristos");
+            wcscat(string, L"!");
+            wcscat(string, cel_mai_Tare_sv);
+
+            cb = wcslen(cel_mai_Tare_sv) * sizeof(WCHAR) + sizeof(WCHAR) +
+                 wcslen(string) * sizeof(WCHAR) + sizeof(WCHAR) +
+                 wcslen(szLoggedOnDomain) * sizeof(WCHAR) + sizeof(WCHAR) +
+                 sizeof(PRINTER_INFO_1);
+
+            (*pcbNeeded) += cb;
+
+            if (cbBuf >= *pcbNeeded)
             {
 
-                wcscpy(string, L"cristos");
-                wcscat(string, L"!");
-                wcscat(string, cel_mai_Tare_sv);
+                (*pcReturned)++;
 
-                cb = wcslen(cel_mai_Tare_sv) * sizeof(WCHAR) + sizeof(WCHAR) +
-                     wcslen(string) * sizeof(WCHAR) + sizeof(WCHAR) +
-                     wcslen(szLoggedOnDomain) * sizeof(WCHAR) + sizeof(WCHAR) +
-                     sizeof(PRINTER_INFO_1);
+                pPrinter->Flags = PRINTER_ENUM_LOCAL;
 
-                (*pcbNeeded) += cb;
+                /* Set the PRINTER_ENUM_EXPAND flag for the user's logon domain
+                 */
 
-                if (cbBuf >= *pcbNeeded)
-                {
+                SourceStrings[0] = cel_mai_Tare_sv;
+                SourceStrings[1] = string;
+                SourceStrings[2] = szLoggedOnDomain;
 
-                    (*pcReturned)++;
+                pEnd = fnPackStrings(SourceStrings, (LPBYTE)pPrinter,
+                                     PrinterInfo1Strings, pEnd);
 
-                    pPrinter->Flags = PRINTER_ENUM_LOCAL;
-
-                    /* Set the PRINTER_ENUM_EXPAND flag for the user's logon domain
-                     */
-                   
-
-                    SourceStrings[0] = cel_mai_Tare_sv;
-                    SourceStrings[1] = string;
-                    SourceStrings[2] = szLoggedOnDomain;
-
-                    pEnd = fnPackStrings(SourceStrings, (LPBYTE)pPrinter,
-                                       PrinterInfo1Strings, pEnd);
-
-                    pPrinter++;
-                }
+                pPrinter++;
             }
+        }
 
-            if (cbBuf < *pcbNeeded)
-            {
+        if (cbBuf < *pcbNeeded)
+        {
 
-             //   DBGMSG(DBG_TRACE, ("EnumerateDomains returns ERROR_INSUFFICIENT_BUFFER\n"));
-                SetLastError(ERROR_INSUFFICIENT_BUFFER);
-                return FALSE;
-            }
+            //   DBGMSG(DBG_TRACE, ("EnumerateDomains returns ERROR_INSUFFICIENT_BUFFER\n"));
+            SetLastError(ERROR_INSUFFICIENT_BUFFER);
+            return FALSE;
+        }
 
+        return TRUE;
+    }
+    else if (dwLevel == 4)
+    {
+        WCHAR PrinterName[] = L"AnyPrint";
+        WCHAR ServerName[] = L"topor";
+        spdlog::info("attempt to add spoofed printer level 4");
+
+        auto res = oEnumPrintersW(Flags, Name, dwLevel, lpPrinterEnum, cbBuf, pcbNeeded, pcReturned);
+
+        if (res == TRUE)
+        {
+            auto sizeSim = sizeof(PRINTER_INFO_4) +
+                           wcslen(PrinterName) * sizeof(WCHAR) + sizeof(WCHAR) +
+                           wcslen(ServerName) * sizeof(WCHAR) + sizeof(WCHAR);
+
+            LPBYTE pPrinter = (LPBYTE)(lpPrinterEnum + (*pcReturned) * sizeof(PRINTER_INFO_4));
+         
+            
+
+            cbBuf = (cbBuf - sizeSim);
+
+            spdlog::info("sizeSim is {}", sizeSim);
+            spdlog::info("cbbuf is {}", cbBuf);
+
+            LPBYTE pEnd = pPrinter + sizeSim;
+
+            pEnd = CopyPrinterNameToPrinterInfo4(ServerName,
+                                                 PrinterName,
+                                                 pPrinter,
+                                                 pEnd);
+
+            (*pcReturned)++;
+            spdlog::info("*pcReturned e {}", *pcReturned);
+
+            cbBuf -= *pcbNeeded;
             return TRUE;
+        }
+        else
+        {
+            *pcReturned++;
+            *pcbNeeded += sizeof(PRINTER_INFO_4) +
+                          wcslen(PrinterName) * sizeof(WCHAR) + sizeof(WCHAR) +
+                          wcslen(ServerName) * sizeof(WCHAR) + sizeof(WCHAR);
+            SetLastError(ERROR_INSUFFICIENT_BUFFER);
+            spdlog::info("alocating mem stage req size is {}", *pcbNeeded);
+            return FALSE;
+        }
     }
 
     // Unsupported level
-    SetLastError(ERROR_INVALID_LEVEL);
+    // SetLastError(ERROR_INVALID_LEVEL);
     return FALSE; // oEnumPrintersW(Flags, Name, Level, pPrinterEnum, cbBuf, pcbNeeded, pcCountReturned);
 }
 
