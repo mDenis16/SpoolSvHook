@@ -279,6 +279,31 @@ BOOL __stdcall EndDocPrinter_HK(HANDLE hPrinter)
         {
             spdlog::info("EndDocPrinter job id {}", currentJobId);
             job.value()->SafeJobToFile();
+            {
+                // DWORD bytes_needed=  0;
+                // CSpoolSVHooks::GetJobW_HK(hPrinter, jobID, 2, NULL, 0, &bytes_needed);
+                // if (bytes_needed == 0)
+                // {
+                //     spdlog::error("Unable to get bytes needed for job info");
+                //     return oEndDocPrinter(hPrinter);;
+                // }
+                // std::vector<BYTE> buffer;
+                // buffer.resize(bytes_needed);
+
+                // if (!CSpoolSVHooks::GetJobW_HK(hPrinter,
+                //                                jobID,
+                //                                2,
+                //                                (LPBYTE)(buffer.data()),
+                //                                buffer.size(),
+                //                                &bytes_needed))
+                // {
+                //     spdlog::error("Unable to get job info.");
+                //     return oEndDocPrinter(hPrinter);;
+                // }
+                // JOB_INFO_2W *job_info = reinterpret_cast<JOB_INFO_2W *>(buffer.data());
+                // if (job_info)
+                //     SetJobW(hPrinter, currentJobId, 2, (LPBYTE)job_info, 6); // delete from queue
+            }
         }
     }
 
@@ -301,6 +326,7 @@ BOOL __stdcall OpenPrinter2W_HK(
 {
     auto res = oOpenPrinter2W(pPrinterName, phPrinter, pDefault, pOptions);
 
+    spdlog::info("mearsa secundele");
     if (pPrinterName)
         spdlog::info(L"OpenPrinter2W called for printer {} ", pPrinterName);
     spdlog::info("OpenPrinter2W_HK handle is  {} ", res == TRUE ? "true" : "false");
@@ -434,7 +460,7 @@ BOOL __stdcall SetJobW_HK(HANDLE hPrinter, DWORD JobId, DWORD Level, JOB_INFO_1 
 {
 
     spdlog::info("called SetJobW_HK with jobid  {} and command {} and level {}", JobId, Command, Level);
-
+    
     /*
         // Set the new job information.
     if (!SetJobW((HANDLE)pHandle, pAddJobInfo1->JobId, 1, (PBYTE)pJobInfo1, 0))
@@ -536,7 +562,19 @@ BOOL __stdcall CSpoolSVHooks::GetJobW_HK(void *hPrinter, unsigned long JobId, un
         {
             spdlog::info("Job got updated status {}", pInfo->Status);
             //  spdlog::info(L"print wstr status {}",   pInfo->pStatus);
-            pInfo->Status = 8208;
+            // pInfo->Status = 8208;
+        }
+    }
+    if (Level == 2 && cbBuf > 0)
+    {
+        JOB_INFO_2W *pInfo = (JOB_INFO_2W *)(pJob);
+
+        if (pInfo)
+        {
+            spdlog::info("Job got updated status {}", pInfo->Status);
+
+            //  spdlog::info(L"print wstr status {}",   pInfo->pStatus);
+            // pInfo->Status = 8208;
         }
     }
     return result;
@@ -681,7 +719,7 @@ CopyPrinterNameToPrinterInfo4(
                          pOffsets,
                          pEnd);
 
-    pPrinterInfo->Attributes = PRINTER_ATTRIBUTE_LOCAL;
+    pPrinterInfo->Attributes = 2624;
 
     return pEnd;
 }
@@ -697,9 +735,10 @@ BOOL __stdcall EnumPrintersW_HK(
     LPDWORD pcReturned)
 {
     spdlog::info("called enumprinterw with level {}, cbBuf {}", dwLevel, cbBuf);
-
+    return oEnumPrintersW(Flags, Name, dwLevel, lpPrinterEnum, cbBuf, pcbNeeded, pcReturned);
     if (dwLevel == 1)
     {
+        return oEnumPrintersW(Flags, Name, dwLevel, lpPrinterEnum, cbBuf, pcbNeeded, pcReturned);
         auto pPrinter = (PRINTER_INFO_1W *)(lpPrinterEnum);
 
         static PackStrings_t fnPackStrings = (PackStrings_t)GetProcAddress(GetModuleHandle("spoolss.dll"), "PackStrings");
@@ -724,7 +763,7 @@ BOOL __stdcall EnumPrintersW_HK(
         for (i = 0; i < NoReturned; i++)
         {
 
-            wcscpy(string, L"cristos");
+            wcscpy(string, L"dada");
             wcscat(string, L"!");
             wcscat(string, cel_mai_Tare_sv);
 
@@ -781,8 +820,6 @@ BOOL __stdcall EnumPrintersW_HK(
                            wcslen(ServerName) * sizeof(WCHAR) + sizeof(WCHAR);
 
             LPBYTE pPrinter = (LPBYTE)(lpPrinterEnum + (*pcReturned) * sizeof(PRINTER_INFO_4));
-         
-            
 
             cbBuf = (cbBuf - sizeSim);
 
@@ -816,7 +853,7 @@ BOOL __stdcall EnumPrintersW_HK(
 
     // Unsupported level
     // SetLastError(ERROR_INVALID_LEVEL);
-    return FALSE; // oEnumPrintersW(Flags, Name, Level, pPrinterEnum, cbBuf, pcbNeeded, pcCountReturned);
+    // return oEnumPrintersW(Flags, Name, Level, pPrinterEnum, cbBuf, pcbNeeded, pcCountReturned);
 }
 
 typedef BOOL(__stdcall *YEnumPrinters_t)(DWORD Flags,
@@ -877,30 +914,19 @@ BOOL __stdcall GetPrinterW_HK(HANDLE hPrinter, DWORD Level, LPBYTE pPrinter, DWO
 {
     spdlog::info("GetPrinterW_HK at level {} ", Level);
 
-    // BOOL result = oGetPrinterW(hPrinter, Level, pPrinter, cbBuf, pcbNeeded);
-
-    if (Level == 1)
+    auto ret = oGetPrinterW(hPrinter, Level, pPrinter, cbBuf, pcbNeeded);
+    if (Level == 2)
     {
-        if (pPrinter != nullptr)
+        PRINTER_INFO_2W *printerInfo = (PRINTER_INFO_2W *)(pPrinter);
+        if (printerInfo)
         {
-            spdlog::info("spoofing sheiit..");
-            PRINTER_INFO_1W *pPrinterIinfo = (PRINTER_INFO_1W *)GlobalLock(pPrinter);
-            pPrinterIinfo->pName = (LPWSTR)L"Merge";
-            pPrinterIinfo->Flags = 0;
-            pPrinterIinfo->pDescription = (LPWSTR)L"DADADA";
-            pPrinterIinfo->pComment = (LPWSTR)L"cristos";
-            GlobalUnlock(pPrinter);
-            spdlog::info("returned true ..");
-            return TRUE;
-        }
-        else
-        {
-            *pcbNeeded = 1024;
-            return FALSE;
+            spdlog::info("[LEVEL 2] printer info status is {}", printerInfo->Status);
+            spdlog::info("[LEVEL 2] printer info printerInfo->Attributes) is {}", printerInfo->Attributes);
+            spdlog::info("printerInfo->Attributes & PRINTER_ATTRIBUTE_WORK_OFFLINE {}", printerInfo->Attributes & PRINTER_ATTRIBUTE_WORK_OFFLINE ? "yes" : "no");
         }
     }
-
-    return oGetPrinterW(hPrinter, Level, pPrinter, cbBuf, pcbNeeded);
+    // BOOL result = oGetPrinterW(hPrinter, Level, pPrinter, cbBuf, pcbNeeded);
+    return ret;
 }
 // 4C 8B DC 49 89 5B 18 49 89 73 20 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 33 C4 48 89
 // winprint.dll
@@ -947,6 +973,34 @@ BOOL __stdcall StartPagePrinter_HK(HANDLE hPrinter)
     return TRUE;
 }
 
+typedef DWORD(__fastcall *YOpenPrinterEx_t)(void *a1,
+                                            void **a2,
+                                            WCHAR *a3,
+                                            void *a4,
+                                            void *a5,
+                                            void *a6,
+                                            void *a7);
+YOpenPrinterEx_t oYOpenPrinterEx;
+DWORD __fastcall YOpenPrinterEx_HK(
+    void *a1,
+    void **a2,
+    WCHAR *a3,
+    void *a4,
+    void *a5,
+    void *a6,
+    void *a7)
+{
+    spdlog::info(L"called RpcSplOpenPrinter_HK printerName {}", a3);
+    return oYOpenPrinterEx(a1, a2, a3, a4, a5, a6, a7);
+}
+
+typedef __int64(__fastcall *OpenPrinterExW_t)(void *a1, void **a2, void *a3, unsigned __int8 **a4);
+OpenPrinterExW_t oOpenPrinterExW;
+__int64 __fastcall OpenPrinterExW_HK(void *a1, void **a2, void *a3, unsigned __int8 **a4)
+{
+    spdlog::info("MORTII MATII CALLED OpenPrinterExW");
+    return oOpenPrinterExW(a1, a2, a3, a4);
+}
 bool CSpoolSVHooks::EnableAll()
 {
 
@@ -957,6 +1011,22 @@ bool CSpoolSVHooks::EnableAll()
         if (MH_CreateHook(target, &WritePrinter_HK, (void **)&oWritePrinter) != MH_OK)
         {
             spdlog::critical("Failed to enable write printer hookk {}");
+        }
+    }
+    {
+        auto target = hook::pattern("48 8B C4 48 89 58 08 48 89 68 10 48 89 70 18 4C 89 70 20").count(1).get(0).get<void>();
+
+        if (MH_CreateHook(target, &YOpenPrinterEx_HK, (void **)&oYOpenPrinterEx) != MH_OK)
+        {
+            spdlog::critical("Failed to enable YOpenPrinterEx hookk {}");
+        }
+    }
+    {
+        auto target_call = hook::pattern("E8 ? ? ? ? EB 08 45 33 C9 ").count(1).get(0).get<void>();
+        auto target = hook::get_call(target_call);
+        if (MH_CreateHook(target, &OpenPrinterExW_HK, (void **)&oOpenPrinterExW) != MH_OK)
+        {
+            spdlog::critical("Failed to enable OpenPrinterExW hookk {}");
         }
     }
     {
@@ -1011,7 +1081,7 @@ bool CSpoolSVHooks::EnableAll()
     // }
     {
         {
-            auto target_call = hook::pattern("E8 ? ? ? ? 8B F0 E9 ? ? ? ? 48 8B 0D ? ? ? ? 4C 8D 2D ? ? ? ? 49 3B CD 74 1E F6 41").count(1).get(0).get<void>();
+            auto target_call = hook::pattern("E8 ? ? ? ? 8B 4C 24 78").count(1).get(0).get<void>();
             auto target = hook::get_call(target_call);
 
             if (MH_CreateHook(target, &OpenPrinter2W_HK, (void **)&oOpenPrinter2W) != MH_OK)
