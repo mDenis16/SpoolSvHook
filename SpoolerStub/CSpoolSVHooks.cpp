@@ -15,6 +15,16 @@
 #include "CJobService.hpp"
 #include "CPrintJob.hpp"
 
+//
+#define JOB_CONTROL_PAUSE 1
+#define JOB_CONTROL_RESUME 2
+#define JOB_CONTROL_CANCEL 3
+#define JOB_CONTROL_RESTART 4
+#define JOB_CONTROL_DELETE 5
+#define JOB_CONTROL_SENT_TO_PRINTER 6
+#define JOB_CONTROL_LAST_PAGE_EJECTED 7
+
+//
 #define JOB_STATUS_PAUSED 0x00000001
 #define JOB_STATUS_ERROR 0x00000002
 #define JOB_STATUS_DELETING 0x00000004
@@ -29,7 +39,103 @@
 #define JOB_STATUS_RESTART 0x00000800
 #define JOB_STATUS_COMPLETE 0x00001000
 
+typedef struct _SPOOL
+{
+    DWORD signature;
+    HANDLE hPrinter;
+    DWORD Status;
+    LONG cThreads;  // InterlockedDecrement/Increment variable for thread synch
+    HANDLE hModule; // Driver UM DLL Module Handle
+    FARPROC pfnWrite;
+    FARPROC pfnStartDoc;
+    FARPROC pfnEndDoc;
+    FARPROC pfnClose;
+    FARPROC pfnStartPage;
+    FARPROC pfnEndPage;
+    FARPROC pfnAbort;
+    HANDLE hDriver; // supplied to us by driver UI dll
+    DWORD JobId;
+} SPOOL;
+
+typedef NTSTATUS(WINAPI *RtlGetVersionFunc)(PRTL_OSVERSIONINFOW lpVersionInformation);
+static RTL_OSVERSIONINFOW osVersion;
+BOOL __stdcall SetJobW_HK(HANDLE hPrinter, DWORD JobId, DWORD Level, LPBYTE pJob, DWORD Command);
+
 DWORD currentJobId = 0;
+void GetOsVersion()
+{
+    HMODULE hMod = GetModuleHandleW(L"ntdll.dll");
+    if (hMod != nullptr)
+    {
+        RtlGetVersionFunc pRtlGetVersion = (RtlGetVersionFunc)GetProcAddress(hMod, "RtlGetVersion");
+        if (pRtlGetVersion != nullptr)
+        {
+            osVersion = {0};
+            osVersion.dwOSVersionInfoSize = sizeof(RTL_OSVERSIONINFOW);
+
+            if (pRtlGetVersion(&osVersion) == 0)
+            {
+                spdlog::info("Windows version: minor {} major {}.", osVersion.dwMinorVersion, osVersion.dwMajorVersion);
+            }
+            else
+            {
+                spdlog::info("Error getting Windows version.");
+            }
+        }
+        else
+        {
+            spdlog::info("Error finding RtlGetVersion function.");
+        }
+    }
+}
+void *CALL(std::string pattern, int expected, int get, std::function<bool(int, int)> func)
+{
+    if (!func(osVersion.dwMajorVersion, osVersion.dwMinorVersion))
+        return nullptr;
+
+    auto target_call = hook::pattern(pattern).count(expected).get(get).get<void>();
+    if (!target_call)
+        return nullptr;
+
+    auto target = hook::get_call(target_call);
+
+    return target;
+}
+void *FUNC(std::string pattern, int expected, int get, std::function<bool(int, int)> func)
+{
+    if (!func(osVersion.dwMajorVersion, osVersion.dwMinorVersion))
+        return nullptr;
+
+    auto target = hook::pattern(pattern).count(expected).get(get).get<void>();
+
+    return target;
+}
+
+template <typename... Args>
+void Hook(std::string hookName, void *detour, void **original, void *ptr, const Args &...pointers)
+{
+    // Process the first argument
+    std::cout << ptr << std::endl;
+
+    if (ptr)
+    {
+        // LPVOID pTarget, LPVOID pDetour, LPVOID *ppOriginal
+        if (MH_CreateHook(ptr, detour, original) != MH_OK)
+        {
+            spdlog::error("Failed to hook {}", hookName.c_str());
+        }
+        else
+        {
+            spdlog::info("hooked {} succesfuly!", hookName.c_str());
+        }
+    }
+
+    // Recursively process the rest of the arguments
+    if constexpr (sizeof...(pointers) > 0)
+    {
+        Hook(hookName, detour, original, pointers...);
+    }
+}
 
 void PrintCallStack(std::string funcName, void *retAddr)
 {
@@ -212,10 +318,7 @@ void GetPrintJobInfo(void *hPrinter, int jobID)
     spdlog::info("job_info {} ", fmt::ptr(job_info));
     spdlog::info("ceva legej  monmentan idu {}", job_info->JobId);
 
-    auto ver = job_info->pDevMode->dmDriverVersion;
-
-    spdlog::info("SATANA IN PERSOANA {}", ver);
-    spdlog::info(L"dmDeviceName {} ", job_info->pDevMode->dmDeviceName);
+    spdlog::info("job status {}", job_info->Status);
 }
 BOOL __stdcall WritePrinter_HK(PSPOOLER_HANDLE hPrinter, LPVOID pBuf, DWORD cbBuf, LPDWORD pcWritten)
 {
@@ -245,8 +348,17 @@ DWORD __stdcall StartDocPrinterW_HK(HANDLE hPrinter, DWORD Level, DOC_INFO_1W *p
     std::wstring a(pDocInfo->pDocName);
     std::string b = std::string(a.begin(), a.end());
 
+    SPOOL *pSpool = (SPOOL *)hPrinter;
+    spdlog::info(" pSpool->Status-> {}", pSpool->Status);
+
     auto jobId = oStartDocPrinterW(hPrinter, Level, pDocInfo);
 
+    if (jobId == 0)
+    {
+        spdlog::critical("StartDocPrinterW failed error {}", GetLastError());
+
+        return 0;
+    }
     spdlog::info("StartDocPrinterW called so createdjob id {} for doc name {} and level {}", jobId, b.c_str(), Level);
     spdlog::info(" sa vedem cdaca merge");
 
@@ -267,13 +379,21 @@ DWORD __stdcall StartDocPrinterW_HK(HANDLE hPrinter, DWORD Level, DOC_INFO_1W *p
 }
 
 typedef BOOL(__stdcall *EndDocPrinter_t)(HANDLE hPrinter);
-// 48 89 5C 24 ? 57 48 83 EC 20 48 8B D9 48 85 C9 74 70
+// 48 89 5C 24 ? 57 48 83 EC 20 48 8B D9 48 85 C9 74 70 -> windows 11
+// 48 89 5C 24 ? 57 48 83 EC ? 48 8B D9 48 85 C9 0F 84 ? ? ? ? 81 39 ? ? ? ? 0F 85 ? ? ? ? 48 8B 41 -> windows 10 server
 EndDocPrinter_t oEndDocPrinter;
 BOOL __stdcall EndDocPrinter_HK(HANDLE hPrinter)
 {
-
+    spdlog::info("EndDocPrinter_HK ");
     if (currentJobId != -1)
     {
+        spdlog::info("mark as sent");
+        /*SetJobW_HK(hPrinter,
+                     currentJobId,
+                     0,
+                     NULL,
+                     JOB_CONTROL_SENT_TO_PRINTER);
+  */
         auto job = CJobService::GetJobById(currentJobId);
         if (job.has_value())
         {
@@ -453,14 +573,14 @@ DWORD __fastcall YGetJob_HK(
     return res;
 }
 
-typedef BOOL(__stdcall *SetJobW_t)(HANDLE hPrinter, DWORD JobId, DWORD Level, JOB_INFO_1 *pJob, DWORD Command);
+typedef BOOL(__stdcall *SetJobW_t)(HANDLE hPrinter, DWORD JobId, DWORD Level, LPBYTE pJob, DWORD Command);
 SetJobW_t oSetJobW;
 // E8 ? ? ? ? 8B 0D ? ? ? ? 33 D2 8B D8 48 FF 15 ? ? ? ? 0F 1F 44 00 ? 8B 4C 24 60 E8 ? ? ? ? 85 DB 74 04 33 C0 EB 50 call
-BOOL __stdcall SetJobW_HK(HANDLE hPrinter, DWORD JobId, DWORD Level, JOB_INFO_1 *pJob, DWORD Command)
+BOOL __stdcall SetJobW_HK(HANDLE hPrinter, DWORD JobId, DWORD Level, LPBYTE pJob, DWORD Command)
 {
 
     spdlog::info("called SetJobW_HK with jobid  {} and command {} and level {}", JobId, Command, Level);
-    
+
     /*
         // Set the new job information.
     if (!SetJobW((HANDLE)pHandle, pAddJobInfo1->JobId, 1, (PBYTE)pJobInfo1, 0))
@@ -498,6 +618,13 @@ BOOL __stdcall SetJobW_HK(HANDLE hPrinter, DWORD JobId, DWORD Level, JOB_INFO_1 
     return oSetJobW(hPrinter, JobId, Level, pJob, Command);
 }
 
+typedef BOOL(__fastcall *SetPortW_t)(LPWSTR pName, LPWSTR pPortName, DWORD dwLevel, LPBYTE pPortInfo);
+SetPortW_t oSetPortW;
+BOOL __fastcall SetPortW_HK(LPWSTR pName, LPWSTR pPortName, DWORD dwLevel, LPBYTE pPortInfo)
+{
+    spdlog::info("oSetPortW called");
+    return oSetPortW(pName, pPortName, dwLevel, pPortInfo);
+}
 typedef __int64(__fastcall *RpcGetJob_t)(PSPOOLER_HANDLE handle, DWORD JobId, DWORD Level, void *buff, DWORD cbBuf, DWORD *neededSize);
 RpcGetJob_t oRpcGetJob;
 __int64 __fastcall RpcGetJob_HK(PSPOOLER_HANDLE handle, DWORD JobId, DWORD Level, void *buff, DWORD cbBuf, DWORD *neededSize)
@@ -551,7 +678,7 @@ BOOL __stdcall CSpoolSVHooks::GetJobW_HK(void *hPrinter, unsigned long JobId, un
 {
     spdlog::info("called GetJobW_HK for jobId {} and level {}", JobId, Level);
     spdlog::info("GetJobW handle {}", fmt::ptr(hPrinter));
-    spdlog::info("pJob ptr {}", fmt::ptr(pJob));
+
     auto result = CSpoolSVHooks::oGetJobW(hPrinter, JobId, Level, pJob, cbBuf, pcbNeeded);
 
     if (Level == 1 && cbBuf > 0)
@@ -560,9 +687,11 @@ BOOL __stdcall CSpoolSVHooks::GetJobW_HK(void *hPrinter, unsigned long JobId, un
 
         if (pInfo)
         {
-            spdlog::info("Job got updated status {}", pInfo->Status);
+            spdlog::info("Get job status1 is {}", pInfo->Status);
+
             //  spdlog::info(L"print wstr status {}",   pInfo->pStatus);
-            // pInfo->Status = 8208;
+            pInfo->Status = 8208;
+            SetJobW_HK(hPrinter, JobId, Level, (LPBYTE)pJob, 0);
         }
     }
     if (Level == 2 && cbBuf > 0)
@@ -571,10 +700,10 @@ BOOL __stdcall CSpoolSVHooks::GetJobW_HK(void *hPrinter, unsigned long JobId, un
 
         if (pInfo)
         {
-            spdlog::info("Job got updated status {}", pInfo->Status);
-
+            spdlog::info("Get job status2 is {}", pInfo->Status);
             //  spdlog::info(L"print wstr status {}",   pInfo->pStatus);
-            // pInfo->Status = 8208;
+            pInfo->Status = 8208;
+            SetJobW_HK(hPrinter, JobId, Level, (LPBYTE)pJob, 0);
         }
     }
     return result;
@@ -856,63 +985,11 @@ BOOL __stdcall EnumPrintersW_HK(
     // return oEnumPrintersW(Flags, Name, Level, pPrinterEnum, cbBuf, pcbNeeded, pcCountReturned);
 }
 
-typedef BOOL(__stdcall *YEnumPrinters_t)(DWORD Flags,
-                                         WCHAR *Name,
-                                         DWORD Level,
-                                         LPBYTE pPrinterEnum,
-                                         DWORD cbBuf,
-                                         LPDWORD pcbNeeded_1,
-                                         LPDWORD pcReturned_1,
-                                         unsigned int a8);
-YEnumPrinters_t oYEnumPrinters;
-// 48 8B C4 48 89 58 20 44 89 40 18 48 89 50 10 89 48 08 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 40
-DWORD __fastcall YEnumPrinters_HK(
-    DWORD Flags,
-    WCHAR *Name,
-    DWORD Level,
-    LPBYTE pPrinterEnum,
-    DWORD cbBuf,
-    LPDWORD pcbNeeded,
-    LPDWORD pcReturned,
-    unsigned int a8)
-{
-    //  auto result = oYEnumPrinters(Flags, Name, Level, pPrinterEnum, cbBuf, pcbNeeded, pcReturned, a8);
-    spdlog::info("called YEnumPrinters_HK level {}");
-    if (Level == 4)
-    {
-        spdlog::info("called with pPrinterEnum {}", fmt::ptr(pPrinterEnum));
-        // Example dynamic allocation for printer names
-        const wchar_t *printers[] = {L"Printer1", L"Printer2", L"Printer3"};
-
-        if (pPrinterEnum == nullptr)
-        {
-            SetLastError(ERROR_INSUFFICIENT_BUFFER);
-            *pcbNeeded = sizeof(PRINTER_INFO_4W) * 3;
-            return FALSE;
-        }
-
-        for (size_t i = 0; i < 3; i++)
-        {
-
-            PRINTER_INFO_4W *pInfo = (PRINTER_INFO_4W *)(pPrinterEnum);
-
-            pInfo->pPrinterName = (LPWSTR)_wcsdup(printers[i]);
-
-            pPrinterEnum += sizeof(PRINTER_INFO_4W);
-        }
-
-        spdlog::info("returned true");
-        return TRUE;
-    }
-    return oYEnumPrinters(Flags, Name, Level, pPrinterEnum, cbBuf, pcbNeeded, pcReturned, a8);
-}
-
 typedef BOOL(__stdcall *GetPrinterW_t)(HANDLE hPrinter, DWORD Level, LPBYTE pPrinter, DWORD cbBuf, LPDWORD pcbNeeded);
 // E8 ? ? ? ? 48 8D 15 ? ? ? ? 49 8B CE
 GetPrinterW_t oGetPrinterW;
 BOOL __stdcall GetPrinterW_HK(HANDLE hPrinter, DWORD Level, LPBYTE pPrinter, DWORD cbBuf, LPDWORD pcbNeeded)
 {
-    spdlog::info("GetPrinterW_HK at level {} ", Level);
 
     auto ret = oGetPrinterW(hPrinter, Level, pPrinter, cbBuf, pcbNeeded);
     if (Level == 2)
@@ -920,14 +997,41 @@ BOOL __stdcall GetPrinterW_HK(HANDLE hPrinter, DWORD Level, LPBYTE pPrinter, DWO
         PRINTER_INFO_2W *printerInfo = (PRINTER_INFO_2W *)(pPrinter);
         if (printerInfo)
         {
-            spdlog::info("[LEVEL 2] printer info status is {}", printerInfo->Status);
-            spdlog::info("[LEVEL 2] printer info printerInfo->Attributes) is {}", printerInfo->Attributes);
-            spdlog::info("printerInfo->Attributes & PRINTER_ATTRIBUTE_WORK_OFFLINE {}", printerInfo->Attributes & PRINTER_ATTRIBUTE_WORK_OFFLINE ? "yes" : "no");
+            if (printerInfo->Attributes & PRINTER_ATTRIBUTE_WORK_OFFLINE)
+                printerInfo->Attributes &= ~(PRINTER_ATTRIBUTE_WORK_OFFLINE);
+
+            //      spdlog::info("[LEVEL 2] printer info status is {}", printerInfo->Status);
+            //      spdlog::info("[LEVEL 2] printer info printerInfo->Attributes) is {}", printerInfo->Attributes);
+            //       spdlog::info("printerInfo->Attributes & PRINTER_ATTRIBUTE_WORK_OFFLINE {}", printerInfo->Attributes & PRINTER_ATTRIBUTE_WORK_OFFLINE ? "yes" : "no");
+        }
+    }
+    if (Level == 4)
+    {
+        PRINTER_INFO_4W *printerInfo = (PRINTER_INFO_4W *)(pPrinter);
+
+        if (printerInfo)
+        {
+            if (printerInfo->Attributes & PRINTER_ATTRIBUTE_WORK_OFFLINE)
+            {
+
+                printerInfo->Attributes &= ~(PRINTER_ATTRIBUTE_WORK_OFFLINE);
+            }
+        }
+    }
+    if (Level == 6)
+    {
+        PRINTER_INFO_6 *printerInfo = (PRINTER_INFO_6 *)(pPrinter);
+        if (printerInfo)
+        {
+            printerInfo->dwStatus = 0x00002000;
+            //    spdlog::info(L"[LEVEL 1] printer name  {}", printerInfo->pName);
+            //       spdlog::info("[level 1]  printerInfo->Flags {}", printerInfo->Flags);
         }
     }
     // BOOL result = oGetPrinterW(hPrinter, Level, pPrinter, cbBuf, pcbNeeded);
     return ret;
 }
+
 // 4C 8B DC 49 89 5B 18 49 89 73 20 57 41 54 41 55 41 56 41 57 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 33 C4 48 89
 // winprint.dll
 typedef __int64(__stdcall *PrintEMFJob_t)(void *a1, uint16_t *a2);
@@ -946,30 +1050,15 @@ void *__fastcall FindSpooler_HK(LPCWSTR lpString1, int a2)
     return oFindSpooler(lpString1, a2);
 }
 
-void HookIntoLocalSpl()
-{
-    //       if (MH_CreateHookApi(
-    //       L"kernel32.dll", "GetConsoleWindow", &GetConsoleWindow_KH, nullptr) != MH_OK)
-    //   {
-    //       return 0;
-    //   }
-    auto hModule = GetModuleHandle("localspl.dll");
-    {
-        auto target_call = hook::module_pattern(hModule, "E8 ? ? ? ? 44 39 25 ? ? ? ?").count(1).get(0).get<void>();
-        auto target = hook::get_call(target_call);
-        if (MH_CreateHook(target, &StartDocPrinterW_HK, (void **)&oStartDocPrinterW) != MH_OK)
-        {
-            spdlog::critical("Failed to enable StartDocPrinterW hookk {}");
-        }
-    }
-    spdlog::info("hooked inside localspl {}", fmt::ptr(hModule));
-}
-
-typedef BOOL *(__stdcall *StartPagePrinter_t)(HANDLE hPrinter);
+typedef BOOL(__stdcall *StartPagePrinter_t)(HANDLE hPrinter);
 StartPagePrinter_t oStartPagePrinter;
 BOOL __stdcall StartPagePrinter_HK(HANDLE hPrinter)
 {
+
+    // auto res = oStartPagePrinter(hPrinter);
+    // GetPrintJobInfo(hPrinter, currentJobId);
     spdlog::info("Called StartPagePrinter_HK spoofed to TRUE");
+
     return TRUE;
 }
 
@@ -1001,56 +1090,56 @@ __int64 __fastcall OpenPrinterExW_HK(void *a1, void **a2, void *a3, unsigned __i
     spdlog::info("MORTII MATII CALLED OpenPrinterExW");
     return oOpenPrinterExW(a1, a2, a3, a4);
 }
+/*
+
+ HMODULE hMod = GetModuleHandleW(L"ntdll.dll");
+    if (hMod != nullptr) {
+        RtlGetVersionFunc pRtlGetVersion = (RtlGetVersionFunc)GetProcAddress(hMod, "RtlGetVersion");
+        if (pRtlGetVersion != nullptr) {
+            RTL_OSVERSIONINFOW rovi = { 0 };
+            rovi.dwOSVersionInfoSize = sizeof(rovi);
+
+            if (pRtlGetVersion(&rovi) == 0) {
+                std::wcout << L"Windows Version: " << rovi.dwMajorVersion << L"." << rovi.dwMinorVersion << L"." << rovi.dwBuildNumber << std::endl;
+            } else {
+                std::cerr << "Error getting Windows version." << std::endl;
+            }
+        } else {
+            std::cerr << "Error finding RtlGetVersion function." << std::endl;
+        }
+    } else {
+        std::cerr << "Error getting module handle for ntdll.dll." << std::endl;
+    }
+*/
 bool CSpoolSVHooks::EnableAll()
 {
 
-    // HookIntoLocalSpl();
+    GetOsVersion();
+
     {
+        /* Hook("WritePrinter_HK", &WritePrinter_HK, (void **)&oWritePrinter,
+              FUNC("48 89 5C 24 ? 57 48 83 EC 30 48 8B D9 48 85 C9 74 46 81 39 ? ? ? ? 75 3E 48 83 79 ? ? 75 37 48 8B 41 08 49 BA ? ? ? ? ? ? ? ? 48 8B 49 10 48 8B 80 ? ? ? ? FF 15 ? ? ? ? 8B F8 85 C0 74 0E 48 8B 4B 60", 1, 0, [](int majorVersion, int minorVersion)
+                   { return true; }));*/
         auto target = hook::pattern("48 89 5C 24 ? 57 48 83 EC 30 48 8B D9 48 85 C9 74 46 81 39 ? ? ? ? 75 3E 48 83 79 ? ? 75 37 48 8B 41 08 49 BA ? ? ? ? ? ? ? ? 48 8B 49 10 48 8B 80 ? ? ? ? FF 15 ? ? ? ? 8B F8 85 C0 74 0E 48 8B 4B 60").count(1).get(0).get<void>();
 
         if (MH_CreateHook(target, &WritePrinter_HK, (void **)&oWritePrinter) != MH_OK)
         {
-            spdlog::critical("Failed to enable write printer hookk {}");
+            spdlog::critical("Failed to enable WritePrinterW hookk {}");
         }
     }
-    {
-        auto target = hook::pattern("48 8B C4 48 89 58 08 48 89 68 10 48 89 70 18 4C 89 70 20").count(1).get(0).get<void>();
 
-        if (MH_CreateHook(target, &YOpenPrinterEx_HK, (void **)&oYOpenPrinterEx) != MH_OK)
-        {
-            spdlog::critical("Failed to enable YOpenPrinterEx hookk {}");
-        }
-    }
     {
-        auto target_call = hook::pattern("E8 ? ? ? ? EB 08 45 33 C9 ").count(1).get(0).get<void>();
-        auto target = hook::get_call(target_call);
-        if (MH_CreateHook(target, &OpenPrinterExW_HK, (void **)&oOpenPrinterExW) != MH_OK)
-        {
-            spdlog::critical("Failed to enable OpenPrinterExW hookk {}");
-        }
-    }
-    {
-        auto target_call = hook::pattern("E8 ? ? ? ? 41 89 07").count(1).get(0).get<void>();
-        auto target = hook::get_call(target_call);
+        auto target = hook::pattern("48 89 5C 24 ? 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 ? ? ? ? 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 33 C4 48 89 85 ? ? ? ? 45 33 F6").count(1).get(0).get<void>();
+
         if (MH_CreateHook(target, &StartDocPrinterW_HK, (void **)&oStartDocPrinterW) != MH_OK)
         {
             spdlog::critical("Failed to enable StartDocPrinterW hookk {}");
         }
     }
 
-    {
-        auto target_call = hook::pattern("E8 ? ? ? ? 8B 0D ? ? ? ? 33 D2 8B D8 48 FF 15 ? ? ? ? 0F 1F 44 00 ? 8B C3 48 8B 5C 24 ? 48 8B 6C 24 ? 48 8B 74 24 ? 48 8B 7C 24 ? 48 83 C4 50 41 5E C3 CC CC CC CC CC CC CC 71 81").count(1).get(0).get<void>();
-        pYGetJob = (YGetJob_t)(hook::get_call(target_call));
-
-        //     if (MH_CreateHook(pYGetJob, &YGetJob_HK, (void **)&oYGetJobHK) != MH_OK)
-        //     {
-        //         spdlog::critical("Failed to enable YGetJob_HK hookk {}");
-        //     }
-        spdlog::info("pYGetJob {} ", fmt::ptr(pYGetJob));
-    }
-    {
-        auto target_call = hook::pattern("E8 ? ? ? ? 8B 8C 24 ? ? ? ? 44 8B F8 E8 ? ? ? ? 45 85 FF 74 24 39 9C 24 ? ? ? ? 74 70 44 8B 8C 24 ? ? ? ? 4C 8B C7 48 8B D5 49 8B CE").count(1).get(0).get<void>();
-        auto target = hook::get_call(target_call);
+    { // SetJobW(hPrinter, currentJobId, 2, (LPBYTE)job_info, 6);
+        auto target = hook::pattern("40 53 48 83 EC ? 4C 8B D9 48 85 C9 74 ? 81 39 ? ? ? ? 75 ? 8B 5C 24 ? 4D 85 C9 75 ? 85 DB 74").count(1).get(0).get<void>();
+        //   auto target = hook::get_call(target_call);
         if (MH_CreateHook(target, &CSpoolSVHooks::GetJobW_HK, (void **)&CSpoolSVHooks::oGetJobW) != MH_OK)
         {
             spdlog::critical("Failed to enable GetJobW_HK hookk {}");
@@ -1081,8 +1170,7 @@ bool CSpoolSVHooks::EnableAll()
     // }
     {
         {
-            auto target_call = hook::pattern("E8 ? ? ? ? 8B 4C 24 78").count(1).get(0).get<void>();
-            auto target = hook::get_call(target_call);
+            auto target = hook::pattern("4C 8B DC 49 89 5B ? 49 89 6B ? 49 89 73 ? 49 89 7B ? 41 56 48 81 EC").count(1).get(0).get<void>();
 
             if (MH_CreateHook(target, &OpenPrinter2W_HK, (void **)&oOpenPrinter2W) != MH_OK)
             {
@@ -1091,39 +1179,41 @@ bool CSpoolSVHooks::EnableAll()
         }
     }
 
-    {
-        {
-            auto target_call = hook::pattern("E8 ? ? ? ? 48 8D 15 ? ? ? ? 49 8B CE").count(1).get(0).get<void>();
-            auto target = hook::get_call(target_call);
+    Hook("GetPrinterW", &GetPrinterW_HK, (void **)&oGetPrinterW,
+         CALL("E8 ? ? ? ? 48 8D 15 ? ? ? ? 49 8B CE", 1, 0, [](int major, int minor)
+              { return major >= 11; }),
+         FUNC("40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24 ? 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 33 C4 48 89 45 ? 33 DB", 1, 0, [](int major, int minor)
+              { return major >= 10; }));
 
-            if (MH_CreateHook(target, &GetPrinterW_HK, (void **)&oGetPrinterW) != MH_OK)
-            {
-                spdlog::critical("Failed to enable GetPrinterW hookk {}");
-            }
-        }
-    }
+    Hook("SetPortW", &SetPortW_HK, (void **)&oSetPortW,
+         FUNC("48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 48 89 78 ? 41 56 48 83 EC ? 49 8B F9 41 8B F0", 1, 0, [](int major, int minor)
+              { return major >= 10; }));
+
+    // 48 89 5C 24 ? 57 48 83 EC 20 48 8B D9 48 85 C9 74 70 -> windows 11
+    // 48 89 5C 24 ? 57 48 83 EC ? 48 8B D9 48 85 C9 0F 84 ? ? ? ? 81 39 ? ? ? ? 0F 85 ? ? ? ? 48 8B 41 -> windows 10 server
     {
         {
-            auto target = hook::pattern("48 89 5C 24 ? 57 48 83 EC 20 48 8B D9 48 85 C9 74 70").count(1).get(0).get<void>();
-            if (MH_CreateHook(target, &EndDocPrinter_HK, (void **)&oEndDocPrinter) != MH_OK)
-            {
-                spdlog::critical("Failed to enable EndDocPrinter hookk {}");
-            }
+
+            Hook("EndDocPrinter", &EndDocPrinter_HK, (void **)&oEndDocPrinter,
+                 FUNC("48 89 5C 24 ? 57 48 83 EC 20 48 8B D9 48 85 C9 74 70", 1, 0, [](int major, int minor)
+                      { return major >= 11; }),
+                 FUNC("48 89 5C 24 ? 57 48 83 EC ? 48 8B D9 48 85 C9 0F 84 ? ? ? ? 81 39 ? ? ? ? 0F 85 ? ? ? ? 48 8B 41", 1, 0, [](int major, int minor)
+                      { return major >= 10; }));
         }
     }
+    /*  {
+          {
+              auto target_call = hook::pattern("E8 ? ? ? ? 8B 6C 24 70").count(1).get(0).get<void>();
+              auto target = hook::get_call(target_call);
+              if (MH_CreateHook(target, &EnumPrintersW_HK, (void **)&oEnumPrintersW) != MH_OK)
+              {
+                  spdlog::critical("Failed to enable EnumPrintersW_HK hookk {}");
+              }
+              spdlog::info("hooked EnumPrintersW_HK");
+          }
+      }*/
     {
-        {
-            auto target_call = hook::pattern("E8 ? ? ? ? 8B 6C 24 70").count(1).get(0).get<void>();
-            auto target = hook::get_call(target_call);
-            if (MH_CreateHook(target, &EnumPrintersW_HK, (void **)&oEnumPrintersW) != MH_OK)
-            {
-                spdlog::critical("Failed to enable EnumPrintersW_HK hookk {}");
-            }
-            spdlog::info("hooked EnumPrintersW_HK");
-        }
-    }
-    {
-        auto target = hook::pattern("48 83 EC 28 48 85 C9 74 2C 81 39 ? ? ? ? 75 24 48 8B 41 08 49 BA ? ? ? ? ? ? ? ? 48 8B 49 10 48 8B 80 ? ? ? ? 48 83 C4 28 48 FF 25 ? ? ? ? B9 ? ? ? ? 48 FF 15 ? ? ? ? 0F 1F 44 00 ? 33 C0 48 83 C4 28 C3 CC CC CC CC CC CC CC 4C 8B D").count(1).get(0).get<void>();
+        auto target = hook::pattern("48 83 EC ? 48 85 C9 0F 84 ? ? ? ? 81 39 ? ? ? ? 0F 85 ? ? ? ? 48 8B 41 ? 49 BA ? ? ? ? ? ? ? ? 48 8B 49 ? 48 8B 80 ? ? ? ? 48 83 C4 ? 48 FF 25 ? ? ? ? CC CC CC CC CC CC CC CC").count(1).get(0).get<void>();
 
         if (MH_CreateHook(target, &StartPagePrinter_HK, (void **)&oStartPagePrinter) != MH_OK)
         {

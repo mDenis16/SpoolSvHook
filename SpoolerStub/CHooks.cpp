@@ -29,4 +29,5 @@ void CHooks::HookAll()
     }
 
     CSpoolSVHooks::EnableAll();
+    
 }

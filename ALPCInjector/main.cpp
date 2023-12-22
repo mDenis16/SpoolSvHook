@@ -138,22 +138,64 @@ void RestartSpoolerService()
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1500));
 }
+BOOL EnableDebugPrivilege(BOOL bEnable)
+{
+    HANDLE hToken = nullptr;
+    LUID luid;
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &hToken))
+        return FALSE;
+    if (!LookupPrivilegeValue(NULL, SE_DEBUG_NAME, &luid))
+        return FALSE;
+    TOKEN_PRIVILEGES tokenPriv;
+    tokenPriv.PrivilegeCount = 1;
+    tokenPriv.Privileges[0].Luid = luid;
+    tokenPriv.Privileges[0].Attributes = bEnable ? SE_PRIVILEGE_ENABLED : 0;
+    if (!AdjustTokenPrivileges(hToken, FALSE, &tokenPriv, sizeof(TOKEN_PRIVILEGES), NULL, NULL))
+        return FALSE;
+    printf("Privileges error: %d\n", GetLastError());
+    return TRUE;
+}
+typedef NTSTATUS(WINAPI* RtlGetVersionFunc)(PRTL_OSVERSIONINFOW lpVersionInformation);
+
+void print_os_info()
+{
+   HMODULE hMod = GetModuleHandleW(L"ntdll.dll");
+    if (hMod != nullptr) {
+        RtlGetVersionFunc pRtlGetVersion = (RtlGetVersionFunc)GetProcAddress(hMod, "RtlGetVersion");
+        if (pRtlGetVersion != nullptr) {
+            RTL_OSVERSIONINFOW rovi = { 0 };
+            rovi.dwOSVersionInfoSize = sizeof(rovi);
+
+            if (pRtlGetVersion(&rovi) == 0) {
+                std::wcout << L"Windows Version: " << rovi.dwMajorVersion << L"." << rovi.dwMinorVersion << L"." << rovi.dwBuildNumber << std::endl;
+            } else {
+                std::cerr << "Error getting Windows version." << std::endl;
+            }
+        } else {
+            std::cerr << "Error finding RtlGetVersion function." << std::endl;
+        }
+    } else {
+        std::cerr << "Error getting module handle for ntdll.dll." << std::endl;
+    }
+}
+
 int main(int argc, char *argv[])
 {
 
     spdlog::set_level(spdlog::level::debug);
-
+    print_os_info();
     if (!IsCurrentProcessElevated())
     {
         std::cout << "Please run injector with administrator rights!\n";
         return 1;
     }
 
+    EnableDebugPrivilege(TRUE);
     RestartSpoolerService();
 
     if (!MoveFileToSystem32())
         return 2;
-
 
     const auto targetPid = GetProcessIdByExecutableName("spoolsv.exe");
 

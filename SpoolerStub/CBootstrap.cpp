@@ -39,6 +39,6 @@ CBootstrap::~CBootstrap()
 }
 void CBootstrap::Run()
 {
+	//m_WebSocket->Run(5566);
 	m_Hooks->HookAll();
-	m_WebSocket->Run(5566);
 }
