@@ -28,6 +28,6 @@ void CHooks::HookAll()
         return;
     }
 
-    CSpoolSVHooks::EnableAll();
+    //CSpoolSVHooks::EnableAll();
     
 }

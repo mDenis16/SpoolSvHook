@@ -13,3 +13,15 @@
 [submodule "Libs/asio"]
 	path = Libs/asio
 	url = https://github.com/chriskohlhoff/asio
+[submodule "Libs/async-sockets-cpp"]
+	path = Libs/async-sockets-cpp
+	url = https://github.com/eminfedar/async-sockets-cpp/
+[submodule "Libs/protobuf"]
+	path = Libs/protobuf
+	url = https://github.com/protocolbuffers/protobuf/
+[submodule "Libs/grpc"]
+	path = Libs/grpc
+	url = https://github.com/grpc/grpc
+[submodule "Libs/abseil-cpp"]
+	path = Libs/abseil-cpp
+	url = https://github.com/abseil/abseil-cpp

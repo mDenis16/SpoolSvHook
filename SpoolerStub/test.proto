@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+option csharp_namespace = "Shared.IPC";
+
+message AuthRequest{
+    string logonusername = 1;
+    string email = 2;
+    string password = 3;
+    string sid = 4;
+};
+
+message AuthReply {
+    int64 result = 1;
+}
+
+
+service AuthSvc {
+    rpc RequestAuthentification (AuthRequest) returns (AuthReply);
+}

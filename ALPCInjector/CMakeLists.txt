@@ -32,7 +32,7 @@ set_target_properties(ALPCInjector PROPERTIES
 set_property(TARGET ALPCInjector PROPERTY CXX_STANDARD 20)
 
 
-target_link_libraries(ALPCInjector PRIVATE spdlog::spdlog)
+target_link_libraries(ALPCInjector PRIVATE spdlog::spdlog absl::strings)
 
 get_filename_component(PARENT_DIR ../ ABSOLUTE)
 message(${PARENT_DIR})

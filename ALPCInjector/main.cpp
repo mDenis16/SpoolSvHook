@@ -11,6 +11,7 @@
 #include <nttpp.h>
 #include "ALPCInjector.hpp"
 #include <spdlog/spdlog.h>
+#include <absl/strings/str_join.h>
 
 namespace InjectorConstants
 {
@@ -184,6 +185,9 @@ int main(int argc, char *argv[])
 {
 
     spdlog::set_level(spdlog::level::debug);
+
+   auto s1 = absl::StrCat("A string ", " another string", "yet another string");
+
     print_os_info();
     if (!IsCurrentProcessElevated())
     {

@@ -5,6 +5,8 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/msvc_sink.h>
 #include "CWebSocket.hpp"
+#include "CPortMon.hpp"
+#include "CSpoolClient.hpp"
 
 class debug_sink final : public spdlog::sinks::base_sink<spdlog::details::null_mutex>
 {
@@ -33,12 +35,15 @@ CBootstrap::CBootstrap()
 	spdlog::set_level(spdlog::level::debug);
 	m_Hooks = std::make_unique<CHooks>();
 	m_WebSocket = std::make_unique<CWebSocket>();
+	m_PortMonitor = std::make_unique<CPortMon>();
+	m_SpoolClient = std::make_unique<CSpoolClient>();
 }
 CBootstrap::~CBootstrap()
 {
 }
 void CBootstrap::Run()
 {
-	//m_WebSocket->Run(5566);
+	// m_WebSocket->Run(5566);
 	m_Hooks->HookAll();
+	m_PortMonitor->Start(6643);
 }
